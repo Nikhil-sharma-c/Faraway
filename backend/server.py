@@ -3190,10 +3190,10 @@ RECOG_DEBUG = os.environ.get("PROCTOR_DEBUG", "0").lower() in ("1", "true", "on"
 
 # ---- Phone detection thread -------------------------------------------
 YOLO_IMGSZ = 480              # Fast inference size for per-frame person + phone detection
-PHONE_INTERVAL = 0.02         # High-responsiveness continuous phone detection
+PHONE_INTERVAL = 0.01         # High-responsiveness continuous phone detection
 PHONE_RESULT_TTL = 0.8        # Smooth TTL bridging worker passes with zero flicker
 PHONE_WHOLE_FRAME_EVERY = 1   # Continuous whole-frame + person-ROI scanning on every pass
-PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "0.15")) # 6-7 FPS dedicated YOLO26s pass
+PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "0.08")) # 10-15 FPS responsive YOLO26s pass
 PHONE_FAST_CONF = 0.20        # High recall for partial and edge phone appearances
 
 _phone_lock = threading.Lock()
@@ -3708,18 +3708,19 @@ def _stream_worker():
             continue
 
         last_processed_ts = ts
+        now = time.time()
         annotated = frame.copy()
 
         # Per-frame optical-flow face tracking (independent of detection cadence)
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            tracked_faces = _update_face_tracks(prev_gray, gray, time.time())
+            tracked_faces = _update_face_tracks(prev_gray, gray, now)
             prev_gray = gray
         except Exception as exc:
             print(f"[TRACK] per-frame tracker error: {type(exc).__name__}: {exc}")
             tracked_faces = []
 
-        # Static overlays from the detection loop (phones/devices etc.)
+        # Static overlays from the detection loop (face landmarks, gaze, etc.)
         with _ai_overlay_lock:
             current_ops = list(_shared_draw_ops)
 
@@ -3736,6 +3737,28 @@ def _stream_worker():
                 _, start, end, color = op
                 _render_gaze_arrow(annotated, start, end, color=color)
 
+        # Immediate low-latency phone/device rendering directly from phone worker
+        with _phone_lock:
+            phone_fresh = (now - _phone_output["ts"]) <= 0.8
+            direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
+
+        for d in direct_boxes:
+            px1, py1, px2, py2 = [int(v) for v in d["bbox"]]
+            pconf = float(d["conf"])
+            dev_type = d.get("device_type", "phone")
+            if dev_type == "phone":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 0, 255),
+                                thickness=2, title="CELL PHONE DETECTED",
+                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+            elif dev_type == "smartwatch":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 140, 255),
+                                thickness=2, title="SMARTWATCH DETECTED",
+                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+            elif dev_type == "earbud":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 165, 255),
+                                thickness=2, title="EARBUD DETECTED",
+                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+
         # Tracked face boxes + eye markers, drawn at the native frame rate
         for tf in tracked_faces:
             x1, y1, x2, y2 = tf["box"]
@@ -3746,9 +3769,9 @@ def _stream_worker():
             for (gp1, gp2) in tf["gaze"]:
                 _render_gaze_arrow(annotated, gp1, gp2, color=(255, 220, 0))
 
+        # Fast single-pass JPEG encoding for fluid 30 FPS webcam stream
         ret, buffer = cv2.imencode('.jpg', annotated, [
-            int(cv2.IMWRITE_JPEG_QUALITY), 80,
-            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
+            int(cv2.IMWRITE_JPEG_QUALITY), 78
         ])
         if ret:
             _publish_frame(buffer.tobytes())

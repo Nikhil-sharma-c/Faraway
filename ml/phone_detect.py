@@ -186,15 +186,28 @@ class PhoneDetector:
             return self._detect_onnx(img)
         out = []
         try:
-            for r in self.model(img, stream=True, verbose=False, imgsz=imgsz,
-                                conf=self.conf, classes=TARGET_CLASSES):
-                for b in r.boxes:
-                    cls_id = int(b.cls[0])
-                    conf_val = float(b.conf[0])
+            results = self.model.predict(
+                img,
+                verbose=False,
+                imgsz=imgsz,
+                conf=self.conf,
+                classes=TARGET_CLASSES,
+                device='cpu'
+            )
+            for r in results:
+                if r.boxes is None or len(r.boxes) == 0:
+                    continue
+                boxes = r.boxes
+                clss = boxes.cls.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                xyxys = boxes.xyxy.cpu().numpy()
+                for i in range(len(clss)):
+                    cls_id = int(clss[i])
+                    conf_val = float(confs[i])
                     min_conf = CONF_THRESHOLDS.get(cls_id, self.conf)
                     if conf_val < min_conf:
                         continue
-                    x1, y1, x2, y2 = map(float, b.xyxy[0])
+                    x1, y1, x2, y2 = float(xyxys[i][0]), float(xyxys[i][1]), float(xyxys[i][2]), float(xyxys[i][3])
                     cls_name = self.names.get(cls_id, str(cls_id))
                     out.append([x1, y1, x2, y2, conf_val, cls_id, cls_name])
         except Exception as err:
