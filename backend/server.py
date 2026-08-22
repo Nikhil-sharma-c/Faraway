@@ -76,6 +76,11 @@ EVIDENCE_FPS = float(os.environ.get("EVIDENCE_FPS", "10"))
 EVIDENCE_RESOLUTION = (640, 480)
 EVIDENCE_COOLDOWN = float(os.environ.get("EVIDENCE_COOLDOWN_SECONDS", "30"))
 EVIDENCE_BUFFER_FRAMES = int(os.environ.get("EVIDENCE_BUFFER_FRAMES", "150"))
+# Hard ceiling on a single encode. A 15s/150-frame clip encodes in well under a
+# second at preset veryfast, so this only ever fires on a genuinely wedged
+# ffmpeg -- it exists so a stuck encoder can never leave a clip on "recording"
+# forever (see the deadlock note in _encode_evidence_frames_h264).
+EVIDENCE_ENCODE_TIMEOUT = float(os.environ.get("EVIDENCE_ENCODE_TIMEOUT", "60"))
 
 DEFAULT_CONFIG = {
     "setup_complete": False,
@@ -2447,6 +2452,10 @@ def end_session():
         accumulated_elapsed_seconds += int((datetime.now() - session_start_time).total_seconds())
     SESSION_ACTIVE = False
     _end_evidence_session()
+    # Let any clip still inside its post-roll finish before the report snapshot
+    # is taken, so evidence videos are embedded instead of a "still processing"
+    # placeholder that can never resolve in an already-written report file.
+    _await_pending_evidence()
     total_session_seconds = accumulated_elapsed_seconds
     session_start_time = None
     session_paused_time = None
@@ -3507,6 +3516,35 @@ def _end_evidence_session():
         _evidence_detection_epoch += 1
 
 
+def _await_pending_evidence(timeout=None):
+    """Block until every in-flight clip has finalized, or `timeout` elapses.
+
+    Called on the end-session path BEFORE the report is rendered. Without it the
+    report is generated in the same breath as the session ending, while any clip
+    triggered in the last few seconds is still inside its post-roll -- so the
+    report renders the "evidence is still processing" placeholder instead of the
+    video, permanently, because the report is a static file written once.
+
+    Clips stop their post-roll as soon as SESSION_ACTIVE goes False, so in
+    practice this returns in well under a second; the timeout is only a
+    backstop. Returns True if nothing is still recording.
+    """
+    if timeout is None:
+        timeout = EVIDENCE_ENCODE_TIMEOUT
+    deadline = time.time() + max(0.0, float(timeout))
+    while True:
+        with _evidence_clips_lock:
+            pending = [c for c in session_evidence_clips
+                       if c.get("status") == "recording"]
+        if not pending:
+            return True
+        if time.time() >= deadline:
+            print(f"[EVIDENCE] {len(pending)} clip(s) still encoding after "
+                  f"{timeout:.0f}s; report will note them as processing")
+            return False
+        time.sleep(0.05)
+
+
 def _evidence_timecode(trigger_timestamp):
     """Return the elapsed session time at a wall-clock capture timestamp."""
     elapsed = accumulated_elapsed_seconds
@@ -3553,7 +3591,20 @@ def _update_evidence_clip(clip_id, generation, **updates):
 
 
 def _encode_evidence_frames_h264(frames, output_path, fps=10.0, resolution=(640, 480)):
-    """Encode frames to browser-playable H.264 MP4 with yuv420p and faststart."""
+    """Encode frames to browser-playable H.264 MP4 with yuv420p and faststart.
+
+    DEADLOCK LANDMINE -- do not "simplify" the stderr handling below.
+    ffmpeg writes progress/diagnostics to stderr continuously. If stderr is a
+    subprocess.PIPE that nothing reads, ffmpeg blocks once the OS pipe buffer
+    fills (~4 KB on Windows) and then stops draining its stdin; this process in
+    turn blocks writing frames to that stdin. Both sides wait on each other
+    forever: proc.wait() never returns, os.replace() never runs, and the clip is
+    stranded on disk as "<name>.mp4.part.mp4" while its status stays
+    "recording" -- which is exactly the "evidence stuck on PROCESSING... and
+    never finishes" bug. Measured: wait() hung indefinitely with 24 MB already
+    written. So: keep stderr quiet AND drain it on a reader thread, and never
+    call wait() without a timeout.
+    """
     import subprocess
     fps_val = max(float(fps), 1.0)
     w, h = resolution
@@ -3568,9 +3619,13 @@ def _encode_evidence_frames_h264(frames, output_path, fps=10.0, resolution=(640,
         ffmpeg_exe = shutil.which("ffmpeg")
 
     if ffmpeg_exe and os.path.exists(ffmpeg_exe):
+        proc = None
         try:
             cmd = [
                 ffmpeg_exe, "-y",
+                "-nostdin",              # never try to read the console
+                "-loglevel", "error",    # keep stderr volume tiny
+                "-nostats",              # no progress spam on stderr
                 "-f", "rawvideo",
                 "-vcodec", "rawvideo",
                 "-s", f"{w}x{h}",
@@ -3584,43 +3639,120 @@ def _encode_evidence_frames_h264(frames, output_path, fps=10.0, resolution=(640,
                 "-movflags", "+faststart",
                 temporary_path
             ]
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE)
+
+            # Drain stderr concurrently so ffmpeg can never block on it.
+            stderr_chunks = []
+
+            def _drain_stderr(pipe):
+                try:
+                    for line in iter(pipe.readline, b""):
+                        if len(stderr_chunks) < 200:
+                            stderr_chunks.append(line)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+
+            drainer = threading.Thread(target=_drain_stderr, args=(proc.stderr,),
+                                       name="evidence-ffmpeg-stderr", daemon=True)
+            drainer.start()
+
             written = 0
+            try:
+                for _ts, raw_frame in frames:
+                    ef = _prepare_evidence_frame(raw_frame)
+                    if ef is None:
+                        continue
+                    proc.stdin.write(ef.tobytes())
+                    written += 1
+            except (BrokenPipeError, OSError) as pipe_exc:
+                # ffmpeg exited early (bad args/codec). Fall through to report.
+                print(f"[EVIDENCE] ffmpeg stdin closed early after "
+                      f"{written} frame(s): {pipe_exc}")
+            finally:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+
+            try:
+                proc.wait(timeout=EVIDENCE_ENCODE_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+                print(f"[EVIDENCE] ffmpeg exceeded "
+                      f"{EVIDENCE_ENCODE_TIMEOUT}s and was killed")
+            drainer.join(timeout=2)
+
+            if (proc.returncode == 0 and os.path.exists(temporary_path)
+                    and os.path.getsize(temporary_path) > 0):
+                os.replace(temporary_path, output_path)
+                return written
+
+            err_text = b"".join(stderr_chunks).decode("utf-8", "replace").strip()
+            print(f"[EVIDENCE] ffmpeg encode failed (rc={proc.returncode}), "
+                  f"falling back to cv2. {err_text[:500]}")
+        except Exception as e:
+            print(f"[EVIDENCE] ffmpeg encode failed, falling back to cv2: {e}")
+        finally:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            # Never leave a half-written temp behind for the next attempt.
+            if os.path.exists(temporary_path):
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+    # Fallback: OpenCV VideoWriter. Try H.264 tags first -- plain "mp4v"
+    # (MPEG-4 Part 2) writes a file most browsers refuse to play, so it is the
+    # last resort and is flagged loudly rather than silently shipping a clip
+    # that renders as a black box in the report.
+    written = 0
+    for fourcc in ("avc1", "H264", "mp4v"):
+        writer = cv2.VideoWriter(
+            temporary_path,
+            cv2.VideoWriter_fourcc(*fourcc),
+            fps_val,
+            resolution
+        )
+        if not writer.isOpened():
+            writer.release()
+            continue
+        written = 0
+        try:
             for _ts, raw_frame in frames:
                 ef = _prepare_evidence_frame(raw_frame)
                 if ef is None:
                     continue
-                proc.stdin.write(ef.tobytes())
+                writer.write(ef)
                 written += 1
-            proc.stdin.close()
-            proc.wait()
-            if proc.returncode == 0 and os.path.exists(temporary_path) and os.path.getsize(temporary_path) > 0:
-                os.replace(temporary_path, output_path)
-                return written
-        except Exception as e:
-            print(f"[EVIDENCE] ffmpeg encode failed, falling back to cv2: {e}")
+        finally:
+            writer.release()
 
-    # Fallback to OpenCV VideoWriter
-    writer = cv2.VideoWriter(
-        temporary_path,
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps_val,
-        resolution
-    )
-    written = 0
-    try:
-        for _ts, raw_frame in frames:
-            ef = _prepare_evidence_frame(raw_frame)
-            if ef is None:
-                continue
-            writer.write(ef)
-            written += 1
-    finally:
-        writer.release()
+        if written > 0 and os.path.exists(temporary_path) and os.path.getsize(temporary_path) > 0:
+            if fourcc == "mp4v":
+                print("[EVIDENCE] WARNING: encoded with mp4v; most browsers "
+                      "cannot play this. Install ffmpeg for H.264 output.")
+            os.replace(temporary_path, output_path)
+            return written
 
-    if written > 0 and os.path.exists(temporary_path):
-        os.replace(temporary_path, output_path)
-    return written
+        if os.path.exists(temporary_path):
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+
+    return 0
 
 
 def _prepare_evidence_frame(frame):
@@ -3724,6 +3856,13 @@ def capture_evidence_clip(event_type, trigger_timestamp=None,
                 with _evidence_lifecycle_lock:
                     if generation != _evidence_session_generation:
                         return
+                # The invigilator ended the session mid post-roll. Stop waiting
+                # for frames that will never arrive (the camera is released once
+                # the session stops) and encode what we already have, so the
+                # end-of-session report is not generated while this clip is
+                # still on "recording".
+                if not SESSION_ACTIVE:
+                    break
                 with _raw_lock:
                     latest_frame = _latest_raw_frame
                     latest_timestamp = _latest_raw_ts
