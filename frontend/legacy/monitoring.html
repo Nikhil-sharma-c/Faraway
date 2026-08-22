@@ -2426,6 +2426,7 @@ let feedOnline         = false;
 let activeFilter       = 'all';
 let alertCount         = 0;
 let backendOnline      = false;
+let detectionStalled   = false;
 let sessionActive      = false;
 
 const GAUGE_CIRCUMFERENCE = 201; // 2 * Math.PI * 32
@@ -2567,18 +2568,27 @@ function onFeedLoaded() {
     logActivity('CCTV feed connected — AI monitoring active');
 }
 
+let _feedRetryTimer = null;
 function onFeedError() {
     feedOnline    = false;
-    backendOnline = false;
     $feedOffline.classList.add('show');
+    // Say we're reconnecting, not a silent black "no signal".
+    const foT = $feedOffline.querySelector('.fo-title');
+    const foB = $feedOffline.querySelector('.fo-body');
+    if (foT) foT.textContent = 'Reconnecting…';
+    if (foB) foB.textContent = 'Restoring the examination feed.';
     $feedImg.style.display       = 'none';
     $cctvDot.style.background    = 'var(--t4)';
     $cctvDot.style.boxShadow     = 'none';
-    $backendDot.style.background = 'var(--t4)';
-    $backendDot.style.boxShadow  = 'none';
-    $backendText.textContent     = 'Backend Offline';
-    setEnginesState(false);
-    updateExamScore([]);
+    // Stream reconnect is INDEPENDENT of detection health: force a fresh MJPEG
+    // connection shortly after any gap (cache-busted so the browser opens a new
+    // stream rather than reusing the dead one).
+    if (!_feedRetryTimer) {
+        _feedRetryTimer = setTimeout(() => {
+            _feedRetryTimer = null;
+            $feedImg.src = `${BASE}/video_feed?ts=${Date.now()}`;
+        }, 1000);
+    }
 }
 
 // ── REAL-TIME SYSTEM CLOCK ───────────────────
@@ -2936,6 +2946,28 @@ async function fetchLiveStatus() {
         if (!res.ok) throw new Error('Status poll failed');
         const data = await res.json();
 
+        // Detection watchdog: if the pipeline hasn't produced a fresh result,
+        // show a clear "reconnecting" state and DO NOT act on the (now stale)
+        // roster/alert data -- never freeze a red "unregistered" banner as if it
+        // were live. Recover automatically once detection resumes.
+        if (data.detection_healthy === false) {
+            if (!detectionStalled) {
+                detectionStalled = true;
+                logActivity('Detection paused — reconnecting AI pipeline…');
+            }
+            if ($hudAlertText) $hudAlertText.textContent = 'Detection reconnecting…';
+            if ($hudAlertBanner) $hudAlertBanner.classList.add('show');
+            $backendText.textContent = 'Detection reconnecting…';
+            $backendDot.style.background = 'var(--warning, #f5a623)';
+            $backendDot.style.boxShadow = '0 0 6px var(--warning, #f5a623)';
+            return;   // skip stale-data-driven UI updates this tick
+        }
+        if (detectionStalled) {
+            detectionStalled = false;
+            if ($hudAlertBanner) $hudAlertBanner.classList.remove('show');
+            logActivity('Detection resumed — AI pipeline healthy');
+        }
+
         if (!backendOnline) {
             backendOnline = true;
             setEnginesState(true);
@@ -2975,16 +3007,33 @@ async function fetchLiveStatus() {
             prevAlerts = prevAlerts.filter(a => a !== 'book');
         }
 
-        if (data.unknown_count > 0 && !prevAlerts.includes('unknown')) {
+        // Tiered, debounced unregistered-person alerting. Severity is decided
+        // server-side by the identity stabiliser (how long an unidentified
+        // person has ACTUALLY, continuously been present) -- not by raw
+        // per-frame recognition, so a present enrolled person momentarily
+        // failing to match no longer spams entered/departed alerts.
+        //   none/caution -> quiet log only (no banner, no risk weight)
+        //   warning       -> single banner + risk weight (fires once)
+        //   critical      -> escalated banner (fires once)
+        const sev = data.unknown_severity || 'none';
+        if (sev === 'caution' && !prevAlerts.includes('unknown_caution')) {
+            logActivity('Note: unidentified person in frame (verifying)');
+            prevAlerts.push('unknown_caution');
+        }
+        if ((sev === 'warning' || sev === 'critical') && !prevAlerts.includes('unknown')) {
             sessionStats.multiPersonEvents++;
             sessionStats.criticalAlerts++;
-            addAlert('Warning: Unregistered person entered exam zone!', 'danger', 30);
-            logActivity('WARNING: Unregistered individual detected');
+            const secs = Math.round(data.unknown_seconds || 0);
+            addAlert(`Warning: Unregistered person in exam zone (${secs}s)`,
+                     sev === 'critical' ? 'danger' : 'warning', sev === 'critical' ? 30 : 15);
+            logActivity(`WARNING: Unregistered individual sustained ${secs}s`);
             prevAlerts.push('unknown');
-        } else if (data.unknown_count === 0 && prevAlerts.includes('unknown')) {
-            addAlert('Area secure — unknown person departed.', 'success');
-            logActivity('Area secure — unknown person departed');
-            prevAlerts = prevAlerts.filter(a => a !== 'unknown');
+        } else if (sev === 'none' && (prevAlerts.includes('unknown') || prevAlerts.includes('unknown_caution'))) {
+            if (prevAlerts.includes('unknown')) {
+                addAlert('Area secure — unregistered person departed.', 'success');
+                logActivity('Area secure — unregistered person departed');
+            }
+            prevAlerts = prevAlerts.filter(a => a !== 'unknown' && a !== 'unknown_caution');
         }
 
         data.students.forEach(s => {

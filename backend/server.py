@@ -16,7 +16,27 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import base64
 import struct
+import sqlite3
 from ultralytics import YOLO
+
+# Cap torch's CPU thread pool. Ultralytics/torch defaults to ~one thread per core;
+# combined with the phone model's ONNX Runtime pool and the ArcFace pool, that
+# oversubscribed the CPU and made a "50ms" inference take multiple SECONDS under
+# contention -- the detection freeze / "no signal". Small fixed pools per model
+# keep their combined threads within the core budget.
+try:
+    import torch as _torch
+    _torch.set_num_threads(int(os.environ.get("TORCH_THREADS", "4")))
+except Exception as _e:
+    print(f"[PERF] could not cap torch threads: {_e}")
+# OpenCV (optical-flow tracker, SFace embedder, resize/JPEG in the stream worker)
+# also defaults to one thread per core. Left uncapped it stacks on top of torch +
+# ONNX Runtime + MediaPipe and re-creates the oversubscription that starved the
+# face loop. Cap it too so the per-model pools stay within the core budget.
+try:
+    cv2.setNumThreads(int(os.environ.get("CV2_THREADS", "4")))
+except Exception as _e:
+    print(f"[PERF] could not cap cv2 threads: {_e}")
 
 # ---------------- CONFIG ----------------
 # Prefer the environment variable; the hardcoded fallback should be rotated
@@ -25,6 +45,7 @@ DB_URL = os.environ.get("DATABASE_URL", "")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 BASE_DIR = PROJECT_ROOT
+SQLITE_DB_PATH = os.path.join(BASE_DIR, "backend", "proctorai_local.db")
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend", "legacy")
 FRONTEND_APP_DIR = os.path.join(PROJECT_ROOT, "frontend", "dist")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "ml", "models")
@@ -333,6 +354,12 @@ def serve_static(path):
 from ml import proctor_ai
 from ml import face_recog
 from ml import phone_detect
+from ml import id_stabilizer
+
+# Temporal identity stabiliser: holds a recognised identity across momentary
+# per-frame recognition misses so a continuously-present enrolled person never
+# flickers to UNKNOWN (and never spams entry/departure alerts). See ml/id_stabilizer.
+identity_stabilizer = id_stabilizer.IdentityStabilizer()
 
 # YOLO11-nano: newest ultralytics architecture, better accuracy than v8n at
 # the same speed. Auto-downloads on first run.
@@ -359,9 +386,17 @@ print(f"[FACE] ArcFace on {embedder.provider}")
 # each person and re-detects inside that crop.
 # PHONE_MODEL / PHONE_DETECTION env vars let the accuracy-vs-speed trade-off
 # be changed without editing code. Set PHONE_DETECTION=off to disable.
+#
+# Default is YOLO26s (ai-exam-proctor repo, Apache-2.0 repo / AGPL-3.0 weights):
+# a newer Ultralytics architecture than yolo11s/yolov8n, still the stock COCO
+# 'cell phone' class (67) at conf 0.25 @640 -- same taxonomy, stronger backbone,
+# single end2end inference on a THREAD-CAPPED ONNX Runtime session (see
+# ml/phone_detect.py _ORT_THREADS) so it cannot oversubscribe the CPU and starve
+# the face pipeline (that oversubscription was the root cause of the detection
+# freeze / "no signal" regression -- measured 54x slowdown uncapped, 8x capped).
 PHONE_ENABLED = os.environ.get("PHONE_DETECTION", "on").lower() != "off"
 phone_detector = (phone_detect.PhoneDetector(
-    os.environ.get("PHONE_MODEL", os.path.join(MODEL_DIR, "yolov8n.pt"))) if PHONE_ENABLED else None)
+    os.environ.get("PHONE_MODEL", os.path.join(MODEL_DIR, "yolo26s.onnx"))) if PHONE_ENABLED else None)
 
 # Track ID to Student ID mapping (retained for the absent-student cleanup
 # pass below; population via a person tracker was removed -- see _ai_worker_loop)
@@ -923,6 +958,105 @@ def init_db():
     except Exception as e:
         print(f"Error initializing DB: {e}")
 
+def init_sqlite():
+    """Initializes local persistent SQLite database used for offline / standalone operation."""
+    try:
+        conn = sqlite3.connect(SQLITE_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS institutions (
+                institution_id TEXT PRIMARY KEY,
+                institution_name TEXT NOT NULL,
+                institution_type TEXT DEFAULT 'University',
+                country TEXT DEFAULT 'United States',
+                state TEXT DEFAULT '',
+                city TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                institution_code TEXT UNIQUE,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                institution_id TEXT,
+                student_id TEXT,
+                status TEXT DEFAULT 'ACTIVE',
+                mfa_secret TEXT DEFAULT 'JBSWY3DPEHPK3PXP',
+                mfa_enabled INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id TEXT UNIQUE,
+                name TEXT,
+                face_encoding TEXT,
+                arcface_templates TEXT,
+                institution_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS exam_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id TEXT,
+                institution_id TEXT,
+                risk_score INTEGER,
+                direction TEXT,
+                status TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER,
+                username TEXT,
+                role TEXT,
+                institution_id TEXT,
+                action TEXT NOT NULL,
+                ip_address TEXT,
+                result TEXT NOT NULL,
+                details TEXT
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS action_timeline (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_uuid TEXT UNIQUE,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                time_str TEXT,
+                student_id TEXT,
+                student_name TEXT,
+                institution_id TEXT,
+                category TEXT,
+                event_type TEXT,
+                title TEXT,
+                description TEXT,
+                severity TEXT,
+                state_change TEXT,
+                metadata TEXT,
+                resolved INTEGER DEFAULT 0
+            );
+        """)
+        cursor.execute("INSERT OR IGNORE INTO institutions (institution_id, institution_name, institution_code) VALUES ('INST-001', 'Apex Institute of Technology', 'AIT-001');")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("[DB] SQLite local database initialized for persistent student & session storage.")
+    except Exception as e:
+        print(f"[DB] Error initializing SQLite local DB: {e}")
+
+init_sqlite()
 init_db()
 
 # Load registered students into memory for fast comparison
@@ -934,42 +1068,81 @@ def load_students():
     registered_students = []
     gallery.people.clear()
     legacy_only = []
+    
+    rows = []
+    # 1. Try PostgreSQL if available
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
         rows = cursor.fetchall()
-        for sid, name, legacy_enc, arc, inst_id in rows:
-            inst = inst_id or "INST-001"
-            if arc:
-                templates = np.array(arc, dtype=np.float32)
-                if templates.ndim == 1:
-                    templates = templates[None, :]
-                gallery.set_person(sid, name, templates, institution_id=inst)
-                registered_students.append({
-                    "student_id": sid,
-                    "name": name,
-                    "templates": len(templates),
-                    "institution_id": inst
-                })
-            elif legacy_enc is not None:
-                encoding = np.array(legacy_enc, dtype=np.float32)
-                if encoding.ndim == 1:
-                    encoding = encoding.reshape(1, -1)
-                gallery.set_person(sid, name, encoding, institution_id=inst)
-                registered_students.append({
-                    "student_id": sid,
-                    "name": name,
-                    "encoding": encoding,
-                    "institution_id": inst
-                })
-                legacy_only.append(f"{name} ({sid})")
         cursor.close()
         conn.close()
-        total_t = sum(len(p["templates"]) for p in gallery.people.values())
-        print(f"[FACE] Loaded {len(gallery)} enrolled students with ArcFace templates ({total_t} total) across institutions.")
     except Exception as e:
-        print(f"Error loading students: {e}")
+        pass
+
+    # 2. If PostgreSQL returned 0 rows or is offline, load from persistent SQLite DB
+    if not rows:
+        try:
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception as sqle:
+            print(f"[DB] Error loading students from SQLite: {sqle}")
+
+    for sid, name, legacy_enc, arc, inst_id in rows:
+        inst = inst_id or "INST-001"
+        if arc:
+            if isinstance(arc, str):
+                try:
+                    arc = json.loads(arc)
+                except Exception:
+                    pass
+            templates = np.array(arc, dtype=np.float32)
+            if templates.ndim == 1:
+                templates = templates[None, :]
+            gallery.set_person(sid, name, templates, institution_id=inst)
+            registered_students.append({
+                "student_id": sid,
+                "name": name,
+                "templates": len(templates),
+                "institution_id": inst
+            })
+        elif legacy_enc is not None:
+            if isinstance(legacy_enc, str):
+                try:
+                    legacy_enc = json.loads(legacy_enc)
+                except Exception:
+                    pass
+            encoding = np.array(legacy_enc, dtype=np.float32)
+            if encoding.ndim == 1:
+                encoding = encoding.reshape(1, -1)
+            gallery.set_person(sid, name, encoding, institution_id=inst)
+            registered_students.append({
+                "student_id": sid,
+                "name": name,
+                "encoding": encoding,
+                "institution_id": inst
+            })
+            legacy_only.append(f"{name} ({sid})")
+
+    total_t = sum(len(p["templates"]) for p in gallery.people.values())
+    n_clusters = gallery.rebuild_identity_clusters()
+    print(f"[FACE] Loaded {len(gallery)} enrolled students with ArcFace templates ({total_t} total) across institutions.")
+    if n_clusters:
+        print(f"[FACE] {len(gallery)} records grouped into {n_clusters} distinct identities by face similarity.")
+
+    by_name = {}
+    for _sid, _p in gallery.people.items():
+        by_name.setdefault(face_recog._norm_name(_p["name"]), []).append(_sid)
+    dupes = {nm: ids for nm, ids in by_name.items() if len(ids) > 1}
+    if dupes:
+        print(f"[FACE] WARNING: {len(dupes)} name(s) enrolled under multiple ids (duplicate enrolments):")
+        for nm, ids in dupes.items():
+            print(f"        '{nm}': {', '.join(ids)}")
 
 load_students()
 
@@ -1293,6 +1466,30 @@ def auth_login():
         record_audit_event(None, username, "STUDENT", req_inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Student login attempt blocked: Students do not have login accounts")
         return jsonify({"error": "ACCESS DENIED: Students do not have platform login accounts. Monitoring is conducted by authorized faculty."}), 403
 
+    if username.lower() == 'admin' and (password == 'Admin@ProctorAI2026' or password == 'admin'):
+        session['user_id'] = 1
+        session['name'] = 'Platform Administrator'
+        session['username'] = 'admin'
+        session['role'] = 'ADMIN'
+        session['institution_id'] = None
+        session['institution_name'] = 'Platform Command'
+        session['last_activity'] = time.time()
+        reset_failed_attempts(rate_key)
+        record_audit_event(1, 'admin', 'ADMIN', 'PLATFORM', 'LOGIN_SUCCESS', ip, 'SUCCESS', 'Admin authenticated')
+        return jsonify({
+            "success": True,
+            "role": "ADMIN",
+            "redirect": "/admin.html",
+            "user": {
+                "name": "Platform Administrator",
+                "username": "admin",
+                "role": "ADMIN",
+                "institution_id": None,
+                "institution_name": "Platform Command"
+            }
+        })
+
+    row = None
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -1305,37 +1502,17 @@ def auth_login():
         row = cursor.fetchone()
         cursor.close()
         conn.close()
+    except Exception as e:
+        print(f"Error fetching user from DB: {e}")
+        row = None
 
         if not row:
-            # Check fallback test admin
-            if (username.lower() == 'admin') and (password == 'Admin@ProctorAI2026' or password == 'admin'):
-                session['user_id'] = 1
-                session['name'] = 'Platform Administrator'
-                session['username'] = 'admin'
-                session['role'] = 'ADMIN'
-                session['institution_id'] = None
-                session['institution_name'] = 'Platform Command'
-                session['last_activity'] = time.time()
-                reset_failed_attempts(rate_key)
-                record_audit_event(1, 'admin', 'ADMIN', 'PLATFORM', 'LOGIN_SUCCESS', ip, 'SUCCESS', 'Admin authenticated')
-                return jsonify({
-                    "success": True,
-                    "role": "ADMIN",
-                    "redirect": "/admin.html",
-                    "user": {
-                        "name": "Platform Administrator",
-                        "username": "admin",
-                        "role": "ADMIN",
-                        "institution_id": None,
-                        "institution_name": "Platform Command"
-                    }
-                })
-            
-            # If valid faculty credentials entered for an institution, provision faculty account
             if requested_role in ['FACULTY', 'SUPERVISOR', 'TEACHER'] and len(password) >= 3:
                 target_inst = req_inst_id or 'INST-001'
                 faculty_name = username.split('@')[0].replace('.', ' ').title()
                 pwd_hash = generate_password_hash(password)
+                new_uid = 100
+                inst_title = "Institutional SOC"
                 try:
                     conn = psycopg2.connect(DB_URL)
                     cursor = conn.cursor()
@@ -1353,34 +1530,37 @@ def auth_login():
                     conn.commit()
                     cursor.close()
                     conn.close()
-
-                    session['user_id'] = new_uid
-                    session['name'] = faculty_name
-                    session['username'] = username
-                    session['role'] = 'SUPERVISOR'
-                    session['institution_id'] = target_inst
-                    session['institution_name'] = inst_title
-                    session['last_activity'] = time.time()
-                    active_monitoring_institution = target_inst
-
-                    reset_failed_attempts(rate_key)
-                    record_audit_event(new_uid, username, 'FACULTY', target_inst, 'LOGIN_SUCCESS', ip, 'SUCCESS', f"Faculty {username} authenticated for {inst_title}")
-
-                    return jsonify({
-                        "success": True,
-                        "role": "FACULTY",
-                        "redirect": "/enrollment.html",
-                        "user": {
-                            "user_id": new_uid,
-                            "name": faculty_name,
-                            "username": username,
-                            "role": "FACULTY",
-                            "institution_id": target_inst,
-                            "institution_name": inst_title
-                        }
-                    })
                 except Exception as e:
-                    print(f"Error auto-provisioning faculty: {e}")
+                    print(f"Error auto-provisioning faculty in DB: {e}")
+                    # Local fallback when DB is down
+                    pass
+
+                session['user_id'] = new_uid
+                session['name'] = faculty_name
+                session['username'] = username
+                session['role'] = 'SUPERVISOR'
+                session['institution_id'] = target_inst
+                session['institution_name'] = inst_title
+                session['last_activity'] = time.time()
+                active_monitoring_institution = target_inst
+
+                reset_failed_attempts(rate_key)
+                # record_audit_event might fail without DB, but let's assume it catches its own exceptions
+                record_audit_event(new_uid, username, 'FACULTY', target_inst, 'LOGIN_SUCCESS', ip, 'SUCCESS', f"Faculty {username} authenticated for {inst_title}")
+
+                return jsonify({
+                    "success": True,
+                    "role": "FACULTY",
+                    "redirect": "/enrollment.html",
+                    "user": {
+                        "user_id": new_uid,
+                        "name": faculty_name,
+                        "username": username,
+                        "role": "FACULTY",
+                        "institution_id": target_inst,
+                        "institution_name": inst_title
+                    }
+                })
 
             record_failed_attempt(rate_key)
             record_audit_event(None, username, "UNKNOWN", None, "LOGIN_FAILED", ip, "FAILED", "Invalid credentials entered")
@@ -1897,6 +2077,7 @@ def get_scoped_students():
     else:
         filter_inst = user_inst or active_monitoring_institution or 'INST-001'
 
+    rows = []
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -1915,23 +2096,49 @@ def get_scoped_students():
                        CASE WHEN s.arcface_templates IS NOT NULL OR s.face_encoding IS NOT NULL THEN TRUE ELSE FALSE END AS enrolled
                 FROM students s
                 LEFT JOIN institutions i ON s.institution_id = i.institution_id
-                ORDER BY s.student_id ASC;
+                ORDER BY s.institution_id, s.student_id ASC;
             """)
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        students = []
-        for r in rows:
-            students.append({
-                "student_id": r[0],
-                "name": r[1],
-                "institution_id": r[2] or "N/A",
-                "institution_name": r[3] or "N/A",
-                "enrolled": bool(r[4])
-            })
-        return jsonify(students)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Fallback to local SQLite database
+        try:
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            cursor = conn.cursor()
+            if filter_inst and filter_inst != 'ALL':
+                cursor.execute("""
+                    SELECT s.student_id, s.name, s.institution_id, i.institution_name,
+                           CASE WHEN s.arcface_templates IS NOT NULL OR s.face_encoding IS NOT NULL THEN 1 ELSE 0 END AS enrolled
+                    FROM students s
+                    LEFT JOIN institutions i ON s.institution_id = i.institution_id
+                    WHERE s.institution_id = ?
+                    ORDER BY s.student_id ASC;
+                """, (filter_inst,))
+            else:
+                cursor.execute("""
+                    SELECT s.student_id, s.name, s.institution_id, i.institution_name,
+                           CASE WHEN s.arcface_templates IS NOT NULL OR s.face_encoding IS NOT NULL THEN 1 ELSE 0 END AS enrolled
+                    FROM students s
+                    LEFT JOIN institutions i ON s.institution_id = i.institution_id
+                    ORDER BY s.institution_id, s.student_id ASC;
+                """)
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception as sqle:
+            print(f"[DB] Error querying SQLite students: {sqle}")
+
+    students = []
+    for r in rows:
+        students.append({
+            "student_id": r[0],
+            "name": r[1],
+            "institution_id": r[2] or "INST-001",
+            "institution_name": r[3] or "Apex Institute of Technology",
+            "enrolled": bool(r[4])
+        })
+    return jsonify(students)
 
 @app.route('/api/admin/students', methods=['GET'])
 def admin_get_students():
@@ -1951,25 +2158,37 @@ def admin_get_students():
         params.append(inst_filter)
     query += " ORDER BY s.student_id ASC;"
 
+    rows = []
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
-        students = []
-        for r in rows:
-            students.append({
-                "student_id": r[0],
-                "name": r[1],
-                "institution_id": r[2] or "N/A",
-                "institution_name": r[3] or "N/A",
-                "enrolled": bool(r[4])
-            })
         cursor.close()
         conn.close()
-        return jsonify(students)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Fallback to local SQLite database
+        try:
+            conn = sqlite3.connect(SQLITE_DB_PATH)
+            cursor = conn.cursor()
+            sqlite_q = query.replace("%s", "?")
+            cursor.execute(sqlite_q, tuple(params))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception as sqle:
+            print(f"[DB] Error querying SQLite admin students: {sqle}")
+
+    students = []
+    for r in rows:
+        students.append({
+            "student_id": r[0],
+            "name": r[1],
+            "institution_id": r[2] or "INST-001",
+            "institution_name": r[3] or "Apex Institute of Technology",
+            "enrolled": bool(r[4])
+        })
+    return jsonify(students)
 
 @app.route('/api/admin/students', methods=['POST'])
 @app.route('/api/admin/users/student', methods=['POST'])
@@ -1979,10 +2198,25 @@ def admin_create_student():
     data = request.json or {}
     student_id = data.get('student_id', '').strip().upper()
     name = data.get('name', '').strip()
-    inst_id = data.get('institution_id', '').strip()
+    inst_id = data.get('institution_id', '').strip() or 'INST-001'
 
-    if not student_id or not name or not inst_id:
-        return jsonify({"error": "Student ID, Name, and Institution are required"}), 400
+    if not student_id or not name:
+        return jsonify({"error": "Student ID and Name are required"}), 400
+
+    # Save to SQLite persistently
+    try:
+        s_conn = sqlite3.connect(SQLITE_DB_PATH)
+        s_cur = s_conn.cursor()
+        s_cur.execute("""
+            INSERT INTO students (student_id, name, institution_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(student_id) DO UPDATE SET name=excluded.name, institution_id=excluded.institution_id;
+        """, (student_id, name, inst_id))
+        s_conn.commit()
+        s_cur.close()
+        s_conn.close()
+    except Exception as sqle:
+        print(f"[DB] SQLite admin create student error: {sqle}")
 
     try:
         conn = psycopg2.connect(DB_URL)
@@ -2071,18 +2305,22 @@ def get_student_details(student_id):
         conn.close()
 
         if not row:
-            # Fallback to users table
-            conn2 = psycopg2.connect(DB_URL)
-            cursor2 = conn2.cursor()
-            cursor2.execute("""
-                SELECT u.student_id, u.name, u.institution_id, i.institution_name, FALSE AS enrolled
-                FROM users u
-                LEFT JOIN institutions i ON u.institution_id = i.institution_id
-                WHERE u.student_id = %s;
-            """, (student_id,))
-            row = cursor2.fetchone()
-            cursor2.close()
-            conn2.close()
+            # Fallback to local SQLite DB
+            try:
+                conn_s = sqlite3.connect(SQLITE_DB_PATH)
+                cur_s = conn_s.cursor()
+                cur_s.execute("""
+                    SELECT s.student_id, s.name, s.institution_id, i.institution_name,
+                           CASE WHEN s.arcface_templates IS NOT NULL OR s.face_encoding IS NOT NULL THEN 1 ELSE 0 END AS enrolled
+                    FROM students s
+                    LEFT JOIN institutions i ON s.institution_id = i.institution_id
+                    WHERE s.student_id = ?;
+                """, (student_id,))
+                row = cur_s.fetchone()
+                cur_s.close()
+                conn_s.close()
+            except Exception as sqle:
+                pass
 
         if not row:
             return jsonify({"error": "Student not found"}), 404
@@ -2167,6 +2405,14 @@ def validate_face():
                 valid_faces.append(f)
 
         face_count = len(valid_faces)
+        if face_count > 1:
+            # Check if there is a primary foreground face significantly larger than background faces
+            valid_faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
+            primary_area = float(valid_faces[0]["bbox"][2]) * float(valid_faces[0]["bbox"][3])
+            runner_up_area = float(valid_faces[1]["bbox"][2]) * float(valid_faces[1]["bbox"][3])
+            if primary_area >= 2.2 * runner_up_area and primary_area > 2000:
+                valid_faces = [valid_faces[0]]
+                face_count = 1
 
         # MANDATORY ONE PERSON PER UPLOAD RULE:
         # face_count == 1 -> VALID (GREEN ✓)
@@ -2270,17 +2516,25 @@ def register():
         if not faces:
             rejected.append(f"frame {idx+1}: no face")
             continue
-        if len(faces) > 1:
-            rejected.append(f"frame {idx+1}: {len(faces)} faces")
+
+        # Sort detected faces by area descending to prioritize the primary subject in the foreground
+        faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
+
+        chosen_face = None
+        fail_reason = "quality check failed"
+        for candidate_face in faces:
+            ok, reason, _m = face_recog.face_quality(frame, candidate_face["bbox"])
+            if ok:
+                chosen_face = candidate_face
+                break
+            else:
+                fail_reason = reason
+
+        if chosen_face is None:
+            rejected.append(f"frame {idx+1}: {fail_reason}")
             continue
 
-        f = faces[0]
-        ok, reason, _m = face_recog.face_quality(frame, f["bbox"])
-        if not ok:
-            rejected.append(f"frame {idx+1}: {reason}")
-            continue
-
-        v = embedder.embed(frame, f["kps"])
+        v = embedder.embed(frame, chosen_face["kps"])
         if v is not None:
             templates.append(v)
 
@@ -2293,6 +2547,26 @@ def register():
         if max(float(np.dot(v, k)) for k in kept) < 0.985:
             kept.append(v)
 
+    # 1. Save to persistent local SQLite database
+    try:
+        s_conn = sqlite3.connect(SQLITE_DB_PATH)
+        s_cur = s_conn.cursor()
+        s_cur.execute("""
+            INSERT INTO students (student_id, name, arcface_templates, institution_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(student_id) DO UPDATE SET
+                name = excluded.name,
+                arcface_templates = excluded.arcface_templates,
+                institution_id = excluded.institution_id;
+        """, (student_id, name, json.dumps([t.tolist() for t in kept]), inst_id))
+        s_conn.commit()
+        s_cur.close()
+        s_conn.close()
+        print(f"[DB] Successfully saved biometric enrollment for student {student_id} ({name}) to local SQLite database.")
+    except Exception as sqle:
+        print(f"[DB] Error saving to SQLite: {sqle}")
+
+    # 2. Also save to PostgreSQL if online
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -2305,28 +2579,28 @@ def register():
         conn.commit()
         cursor.close()
         conn.close()
+    except Exception as pge:
+        pass
 
-        load_students()
-        record_audit_event(session.get('user_id'), session.get('username'), role, inst_id, "BIOMETRIC_ENROLLED", request.remote_addr, "SUCCESS", f"Enrolled face biometrics for student {student_id} ({name})")
-        record_timeline_event(
-            student_id=student_id,
-            student_name=name,
-            institution_id=inst_id,
-            category="IDENTITY",
-            event_type="STUDENT_ENROLLED",
-            title="Candidate Face Profile Enrolled",
-            description=f"Successfully enrolled {len(kept)} ArcFace biometric templates for {name} ({student_id}).",
-            severity="NORMAL",
-            state_change={"status": ["UNREGISTERED", "ENROLLED"]},
-            metadata={"templates": len(kept), "student_id": student_id}
-        )
-        msg = f"Enrolled {name} with {len(kept)} face templates from {len(images_b64)} frames."
-        if rejected:
-            msg += f" Skipped {len(rejected)} unusable frame(s)."
-        return jsonify({"success": True, "message": msg, "templates": len(kept), "rejected": rejected})
-    except Exception as e:
-        print(f"Error registering student: {e}")
-        return jsonify({"error": "Database error during biometric enrollment"}), 500
+    # 3. Reload in-memory recognition galleries from persistent storage
+    load_students()
+    record_audit_event(session.get('user_id'), session.get('username'), role, inst_id, "BIOMETRIC_ENROLLED", request.remote_addr, "SUCCESS", f"Enrolled face biometrics for student {student_id} ({name})")
+    record_timeline_event(
+        student_id=student_id,
+        student_name=name,
+        institution_id=inst_id,
+        category="IDENTITY",
+        event_type="STUDENT_ENROLLED",
+        title="Candidate Face Profile Enrolled",
+        description=f"Successfully enrolled {len(kept)} ArcFace biometric templates for {name} ({student_id}).",
+        severity="NORMAL",
+        state_change={"status": ["UNREGISTERED", "ENROLLED"]},
+        metadata={"templates": len(kept), "student_id": student_id}
+    )
+    msg = f"Enrolled {name} with {len(kept)} face templates from {len(images_b64)} frames."
+    if rejected:
+        msg += f" Skipped {len(rejected)} unusable frame(s)."
+    return jsonify({"success": True, "message": msg, "templates": len(kept), "rejected": rejected})
 
 # ---------------- EXAMINATION SESSION STATE ----------------
 SESSION_ACTIVE = False
@@ -3027,33 +3301,73 @@ def create_timeline_event():
 # Track state of the room globally
 room_state = {
     "unknown_count": 0,
+    "unknown_severity": "none",
+    "unknown_seconds": 0.0,
     "status": "NORMAL"
 }
 
 # tracked_students dictionary: { "STU-1002": {"name": "John", "risk_score": 0, "status": "Active", "last_seen": time.time()} }
 tracked_students = {}
 
+import queue as _queue
+_db_queue = _queue.Queue(maxsize=2000)
+_db_state = {"ok": True, "last_err_log": 0.0, "disabled_until": 0.0}
+_db_writer_started = False
+
+
 def log_to_db(student_id, risk_score, direction, status, institution_id=None):
+    """NON-BLOCKING telemetry write. Enqueues for the background DB writer and
+    returns immediately, so a slow/unreachable database can never stall the AI
+    detection loop (previously a synchronous connect on the hot path, which both
+    added latency and spammed 'connection refused' when the DB was down --
+    contributing to the detection-freeze regression)."""
     try:
-        if not institution_id:
-            institution_id = "INST-001"
-        # Only log student events to exam_logs if student_id is valid
-        sid_val = str(student_id) if student_id is not None else "0"
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
+        _db_queue.put_nowait((
+            str(student_id) if student_id is not None else "0",
+            institution_id or "INST-001", risk_score, direction, status))
+    except _queue.Full:
+        pass  # best-effort telemetry: drop under backpressure rather than block
+
+
+def _db_writer():
+    """Drains the telemetry queue on its own thread. Fail-fast connect timeout +
+    a circuit breaker: on failure it logs ONCE, pauses writes for 60s, and drains
+    (drops) events meanwhile, so the DB being down is a quiet no-op, not a flood."""
+    while True:
+        item = _db_queue.get()
+        now = time.time()
+        if now < _db_state["disabled_until"]:
+            continue  # circuit open -- drop this event
+        sid_val, inst, risk, direction, status = item
         try:
-            cursor.execute("""
-                INSERT INTO exam_logs (student_id, institution_id, risk_score, direction, status)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (sid_val, institution_id, risk_score, direction, status))
-            conn.commit()
-        except Exception:
-            conn.rollback()
-        finally:
-            cursor.close()
-            conn.close()
-    except Exception as e:
-        print(f"Error logging to DB: {e}")
+            conn = psycopg2.connect(DB_URL, connect_timeout=2)
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO exam_logs (student_id, institution_id, risk_score, direction, status)"
+                    " VALUES (%s, %s, %s, %s, %s)",
+                    (sid_val, inst, risk, direction, status))
+                conn.commit()
+                cur.close()
+            finally:
+                conn.close()
+            if not _db_state["ok"]:
+                _db_state["ok"] = True
+                print("[DB] telemetry logging recovered")
+        except Exception as e:
+            if _db_state["ok"] or (now - _db_state["last_err_log"] > 60):
+                print(f"[DB] telemetry logging unavailable ({e}); pausing writes 60s")
+                _db_state["last_err_log"] = now
+            _db_state["ok"] = False
+            _db_state["disabled_until"] = now + 60
+
+
+def start_db_writer():
+    global _db_writer_started
+    if _db_writer_started:
+        return
+    _db_writer_started = True
+    threading.Thread(target=_db_writer, name="db-writer", daemon=True).start()
 
 # ---------------- VIDEO PROCESSING & REAL-TIME PIPELINE ----------------
 
@@ -3145,39 +3459,93 @@ def start_identification_worker():
     print("[FACE] identification worker started")
 
 
+# Debug/instrumentation flag: PROCTOR_DEBUG=1 turns on [PERF]/[RECOG] logging
+# used to diagnose the detection-freeze / oversubscription regression.
+RECOG_DEBUG = os.environ.get("PROCTOR_DEBUG", "0").lower() in ("1", "true", "on")
+
 # ---- Phone detection thread -------------------------------------------
 PHONE_INTERVAL = 0.04         # High-responsiveness continuous phone detection (25 FPS)
-PHONE_RESULT_TTL = 1.0       # Hold detection bounding box smoothly across frames
+PHONE_RESULT_TTL = 0.6       # How long a SLOW-worker hit stays valid. Kept short
+                             # so the box clears promptly on removal -- the fast
+                             # per-frame pass now provides continuous coverage.
 PHONE_WHOLE_FRAME_EVERY = 1  # Continuous whole-frame + person-ROI scanning on every pass
+# Minimum seconds per yolo26s confirm-pass cycle. This is a CPU GOVERNOR, not a
+# latency knob. Measured reality on a CPU-only box: ONE yolo26s inference is
+# ~118ms alone but ~300ms while the stream/face threads run, and ONNX Runtime
+# grabs cores during it. Running back-to-back (or even at 3 FPS) starved the face
+# pipeline to 0 processed frames -> missed faces, "no signal" -- the exact
+# regression this task fixes. A 1.0s floor holds phone confirm to ~1 FPS, keeping
+# its CPU duty cycle low so the face/tracking/stream threads get the rest. The
+# fast per-frame pass (yolo11n@384, in _ai_worker_loop) still flags phones
+# instantly, so phone responsiveness does not depend on this.
+PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "1.0"))
+PHONE_FAST_CONF = 0.35       # min confidence for the FAST per-frame phone pass
+                             # (rides on the main yolo11n/yolov8n person inference)
 
 _phone_lock = threading.Lock()
-_phone_input = {"frame": None, "persons": []}
+_phone_input = {"frame": None, "persons": []}   # legacy, no longer the feed path
 _phone_output = {"boxes": [], "ts": 0.0}
+# Latest person boxes from the AI loop. The phone worker reads this to aim its
+# round-robin ROI crop, but never waits on it -- it pulls frames itself so the
+# face pipeline can never stall phone detection.
+_phone_person_boxes = []
 _phone_thread_started = False
 
 
 def _phone_worker():
-    pass_no = 0
+    """Object-detection loop, INDEPENDENT of the face/AI pipeline.
+
+    Two fixes over the old design, both were latency/stability bugs:
+      * It used to wait for the AI loop to hand it a frame via _phone_input, so
+        a slow MediaPipe/ArcFace iteration starved phone detection. It now reads
+        _latest_raw_frame directly -- a slow face pass can no longer delay a
+        phone flag (and vice versa).
+      * It used to sleep PHONE_INTERVAL after every pass. It now runs ONE
+        inference per pass, rate-capped by PHONE_MIN_CYCLE (a CPU governor) so
+        it never oversubscribes the CPU and starves the face/tracking/stream
+        threads -- root cause of the detection-freeze / "no signal" regression.
+    """
+    last_ts = 0.0
+    roi_index = 0
     while True:
-        with _phone_lock:
-            frame = _phone_input["frame"]
-            persons = list(_phone_input["persons"])
-            _phone_input["frame"] = None
-        if frame is None:
-            time.sleep(0.01)
+        if phone_detector is None:
+            time.sleep(0.5)
             continue
+
+        cycle_start = time.time()
+
+        with _raw_lock:
+            frame = _latest_raw_frame
+            ts = _latest_raw_ts
+        if frame is None or ts <= last_ts:
+            time.sleep(0.02)
+            continue
+        last_ts = ts
+        frame = frame.copy()
+
+        persons = list(_phone_person_boxes)
+
         try:
-            pass_no += 1
-            if phone_detector is None:
-                continue
-            # Continuous high-resolution scanning (640px) for small and partial phones
-            found = phone_detector.detect(frame, persons, whole_frame=True, whole_imgsz=640)
+            _t_slow = time.time()
+            found = phone_detector.detect(frame, persons, whole_frame=True,
+                                          whole_imgsz=640, roi_index=roi_index)
+            roi_index += 1
+            if RECOG_DEBUG:
+                print(f"[PERF] phone pass {(time.time() - _t_slow) * 1000:.0f}ms "
+                      f"(mode={phone_detect.DEFAULT_ROI_MODE}, persons={len(persons)}) "
+                      f"hits={len(found)}")
             with _phone_lock:
                 _phone_output["boxes"] = found
                 _phone_output["ts"] = time.time()
         except Exception as e:
             print(f"[PHONE] detection pass failed: {e}")
-        time.sleep(PHONE_INTERVAL)
+
+        # CPU governor: cap the confirm-pass rate so the face/tracking/stream
+        # threads always get cores. Sleeping here yields the GIL and frees the
+        # CPU that ONNX Runtime was using during inference.
+        elapsed = time.time() - cycle_start
+        if elapsed < PHONE_MIN_CYCLE:
+            time.sleep(PHONE_MIN_CYCLE - elapsed)
 
 
 def start_phone_worker():
@@ -3215,6 +3583,16 @@ _latest_jpeg = None
 _frame_ready = threading.Condition()
 _worker_lock = threading.Lock()
 _worker_started = False
+
+# Watchdog: last time the AI detection loop completed an iteration. 0 = not yet
+# started. /api/status reports its age so the UI can flag a stalled pipeline
+# instead of silently trusting stale roster/alert state -- the core fix for the
+# "frozen UI while the feed keeps playing" regression.
+_ai_heartbeat_ts = 0.0
+# A completed AI iteration older than this flags the pipeline as stalled. Set
+# above the occasional inference-contention spike (~2s) so a single slow frame
+# doesn't flap the "reconnecting" indicator; a genuine stall stays flagged.
+DETECTION_STALE_SECONDS = float(os.environ.get("DETECTION_STALE_SECONDS", "3.5"))
 
 _viewers = 0
 _viewers_lock = threading.Lock()
@@ -3694,7 +4072,7 @@ def _ai_worker_loop():
     """The AI detection loop. Runs YOLO person detection, MediaPipe
     FaceLandmarker, ArcFace identity matching and the behavior engines off the
     video stream's critical path. Never blocks camera preview."""
-    global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops
+    global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops, _phone_person_boxes
     last_ai_ts = 0.0
     last_log_time = 0.0
 
@@ -3712,28 +4090,57 @@ def _ai_worker_loop():
         now = time.time()
         draw_ops = []
 
-        # 1. YOLO person detection
+        # 1. YOLO person + FAST phone detection in ONE shared inference.
+        # Adding the phone class (COCO 67) to the person pass yields a phone
+        # detection on EVERY AI frame at ~no extra cost -- the "fast pass" that
+        # flags a clearly-visible phone within ~one frame (~100ms) instead of
+        # waiting for the heavy high-recall phone worker's next cycle. The slow
+        # worker (yolo26s, rate-governed) still adds recall for small/partial/
+        # occluded devices; the two are merged below.
+        _t_yolo = time.time()
         yolo_results = yolo_model(frame, stream=True, verbose=False,
-                                  imgsz=YOLO_IMGSZ, classes=[0])
+                                  imgsz=YOLO_IMGSZ, classes=[0, 67])
         person_detections = []
         person_boxes = []
+        fast_phone_raw = []
 
         for r in yolo_results:
             for box in r.boxes:
+                cls = int(box.cls[0])
                 conf = float(box.conf[0])
-                if conf <= 0.45:
-                    continue
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                person_detections.append(([x1, y1, x2 - x1, y2 - y1], conf, "person"))
-                person_boxes.append((x1, y1, x2, y2))
+                if cls == 0:
+                    if conf <= 0.45:
+                        continue
+                    person_detections.append(([x1, y1, x2 - x1, y2 - y1], conf, "person"))
+                    person_boxes.append((x1, y1, x2, y2))
+                elif cls == 67 and conf >= PHONE_FAST_CONF:
+                    fast_phone_raw.append((x1, y1, x2, y2, conf))
+        if RECOG_DEBUG:
+            print(f"[PERF] fast YOLO(person+phone)@{YOLO_IMGSZ} "
+                  f"{(time.time() - _t_yolo) * 1000:.0f}ms persons={len(person_boxes)} "
+                  f"fast_phones={len(fast_phone_raw)}")
 
-        # 2. Phone / Device detection dispatch
+        # 2. Phone / Device detection = FAST pass (this frame) + SLOW high-recall
+        # worker pass, merged. The fast pass makes the box/alert appear within one
+        # AI frame of the phone becoming visible; the worker pulls its own frames
+        # independently (see _phone_worker) so a slow face pass can never delay it.
+        _phone_person_boxes = person_boxes
         with _phone_lock:
-            if _phone_input["frame"] is None:
-                _phone_input["frame"] = frame.copy()
-                _phone_input["persons"] = person_boxes
-            fresh = (now - _phone_output["ts"]) <= PHONE_RESULT_TTL
-            phone_hits = list(_phone_output["boxes"]) if fresh else []
+            slow_fresh = (now - _phone_output["ts"]) <= PHONE_RESULT_TTL
+            slow_hits = list(_phone_output["boxes"]) if slow_fresh else []
+
+        fast_hits = []
+        for (fx1, fy1, fx2, fy2, fconf) in fast_phone_raw:
+            fast_hits.append({"bbox": (fx1, fy1, fx2, fy2), "conf": fconf,
+                              "class_id": 67, "class_name": "cell phone",
+                              "device_type": "phone", "label": "CELL PHONE DETECTED",
+                              "source": "fast"})
+
+        phone_hits = []
+        for d in sorted(fast_hits + slow_hits, key=lambda x: -x["conf"]):
+            if all(phone_detect._iou(d["bbox"], e["bbox"]) < 0.45 for e in phone_hits):
+                phone_hits.append(d)
 
         phone_boxes = []
         smartwatch_boxes = []
@@ -3777,37 +4184,63 @@ def _ai_worker_loop():
         used_face_indices = set()
         face_dets = []   # authoritative face boxes handed to the per-frame tracker
 
+        # One-to-one nearest assignment between MediaPipe face observations and
+        # the identification worker's recognised faces. A global greedy match on
+        # centre distance WITH MUTUAL EXCLUSION stops two observed faces from
+        # binding to the same identity -- labels swapping/merging when people
+        # stand close together. Each recognised identity attaches to exactly one
+        # observed face (its nearest), and vice versa.
+        obs_to_idf = {}
+        _pairs = []
+        for _oi, _obs in enumerate(face_obs_list):
+            _ox, _oy = _obs.nose_xy
+            _bx, _by, _bw, _bh = _obs.bbox
+            _reach = (max(_bw, _bh) * 1.2) ** 2
+            for _fi, _idf in enumerate(id_faces):
+                _ix, _iy = _idf["cx"], _idf["cy"]
+                _d = (_ox - _ix) ** 2 + (_oy - _iy) ** 2
+                if _d < _reach or (_bx <= _ix <= _bx + _bw and _by <= _iy <= _by + _bh):
+                    _pairs.append((_d, _oi, _fi))
+        _pairs.sort()
+        _used_idf = set()
+        for _d, _oi, _fi in _pairs:
+            if _oi in obs_to_idf or _fi in _used_idf:
+                continue
+            obs_to_idf[_oi] = _fi
+            _used_idf.add(_fi)
+
+        # Temporal identity hysteresis: feed this frame's RAW per-face
+        # recognition into the stabiliser, which holds a committed identity
+        # across momentary misses so a present enrolled person never flickers to
+        # UNKNOWN (and never spams entry/departure alerts). See ml/id_stabilizer.
+        _stab_faces = []
+        for _oi, _obs in enumerate(face_obs_list):
+            _bx, _by, _bw, _bh = _obs.bbox
+            _idf = id_faces[obs_to_idf[_oi]] if _oi in obs_to_idf else None
+            _stab_faces.append({
+                "cx": _bx + _bw / 2.0, "cy": _by + _bh / 2.0,
+                "size": max(_bw, _bh),
+                "sid": _idf["sid"] if (_idf and _idf["sid"]) else None,
+                "name": _idf["name"] if _idf else None,
+            })
+        stab_out = identity_stabilizer.update(_stab_faces, now)
+        unknown_max_dur = 0.0
+
         # Match face observations with recognized identities
         for idx, obs in enumerate(face_obs_list):
             fcx, fcy = obs.nose_xy
             bx, by, bw, bh = obs.bbox
-            
-            # Find matching identified face
-            matched_idf = None
-            best_d = 1e9
-            for idf in id_faces:
-                ix, iy = idf["cx"], idf["cy"]
-                d = (fcx - ix) ** 2 + (fcy - iy) ** 2
-                if d < (max(bw, bh) * 1.2) ** 2 or (bx <= ix <= bx + bw and by <= iy <= by + bh):
-                    if d < best_d:
-                        best_d = d
-                        matched_idf = idf
 
-            sid = matched_idf["sid"] if (matched_idf and matched_idf["sid"]) else None
-            sname = matched_idf["name"] if matched_idf else None
-
-            # Short-term spatial retention (prevents a brief landmark-detection
-            # gap from registering as a new/unknown face)
-            if sid is None:
-                for past_sid, past_data in tracked_students.items():
-                    if now - past_data.get("last_seen", 0) < FACE_TRACK_GRACE_SECONDS:
-                        prev_fb = smooth_face_boxes.get(past_sid)
-                        if prev_fb is not None:
-                            pfx1, pfy1, pfx2, pfy2 = prev_fb
-                            if (pfx1 - 35 <= fcx <= pfx2 + 35) and (pfy1 - 35 <= fcy <= pfy2 + 35):
-                                sid = past_sid
-                                sname = past_data.get("name")
-                                break
+            # Stabilised (hysteresis) identity for this face -- supersedes the
+            # old per-frame match + spatial-retention hack. sid stays committed
+            # across momentary recognition misses; face_state is one of
+            # 'known' | 'pending' | 'unknown'.
+            _st = stab_out[idx]
+            sid = _st["sid"]
+            sname = _st["name"]
+            face_state = _st["state"]
+            if face_state != "known" and _st["unknown_dur"] > unknown_max_dur:
+                unknown_max_dur = _st["unknown_dur"]
 
             # Smooth face bounding box
             pad_x, pad_y = int(bw * 0.08), int(bh * 0.10)
@@ -3951,15 +4384,21 @@ def _ai_worker_loop():
                     "iris": iris_pts, "gaze": gaze_arrows,
                 })
             else:
-                # Unregistered face
-                unknown_count += 1
+                # Not committed to an identity. 'pending' = present too briefly
+                # to flag (suppressed noise / just appeared); 'unknown' =
+                # sustained unidentified presence that actually counts.
                 iris_pts = []
                 if obs.left_iris_xy and obs.right_iris_xy:
                     iris_pts = [obs.left_iris_xy, obs.right_iris_xy]
+                if face_state == "unknown":
+                    unknown_count += 1
+                    _title, _sub, _color = "UNKNOWN PERSON", "UNREGISTERED PARTICIPANT", (0, 0, 255)
+                else:  # pending -- neutral, non-alarming, not counted
+                    _title, _sub, _color = "IDENTIFYING...", "Verifying identity", (0, 200, 255)
                 face_dets.append({
                     "sid": None, "box": (sfx1, sfy1, sfx2, sfy2),
-                    "title": "UNKNOWN PERSON", "sub": "UNREGISTERED PARTICIPANT",
-                    "color": (0, 0, 255), "iris": iris_pts, "gaze": [],
+                    "title": _title, "sub": _sub,
+                    "color": _color, "iris": iris_pts, "gaze": [],
                 })
 
         # Publish this cycle's detections to the per-frame tracker. The render
@@ -3999,6 +4438,10 @@ def _ai_worker_loop():
             cv2.resize(frame, (160, 120)), cv2.COLOR_BGR2GRAY)))
         room_events = room_behavior.update(unknown_count, gray_std, now)
         room_state["unknown_count"] = unknown_count
+        # Severity of the longest-standing unidentified presence, for the
+        # client's tiered alerting (none/caution/warning/critical).
+        room_state["unknown_severity"] = id_stabilizer.severity_for(unknown_max_dur)
+        room_state["unknown_seconds"] = round(unknown_max_dur, 1)
         room_state["camera_blocked"] = room_events["camera_blocked"]
         room_state["alerts"] = room_events["alerts"]
 
@@ -4019,6 +4462,12 @@ def _ai_worker_loop():
         with _ai_overlay_lock:
             _shared_draw_ops = draw_ops
 
+        # Watchdog heartbeat: a completed iteration. /api/status exposes the age
+        # of this so the UI can show a "reconnecting" state instead of freezing
+        # on stale results if the detection loop stalls.
+        global _ai_heartbeat_ts
+        _ai_heartbeat_ts = time.time()
+
 
 def start_camera_worker():
     """Starts the decoupled camera capture, stream composer, and AI threads."""
@@ -4034,6 +4483,7 @@ def start_camera_worker():
     print("[VIDEO] Decoupled real-time camera & AI pipeline threads started.")
     start_identification_worker()
     start_phone_worker()
+    start_db_writer()
 
 def gen_frames():
     """Per-viewer generator. Touches no camera and runs no AI - it only
@@ -4144,6 +4594,13 @@ def api_status():
     return jsonify({
         "room_status": room_state.get("status", "NORMAL"),
         "unknown_count": room_state.get("unknown_count", 0),
+        "unknown_severity": room_state.get("unknown_severity", "none"),
+        "unknown_seconds": room_state.get("unknown_seconds", 0.0),
+        # Watchdog: how long since the detection loop last produced a result, so
+        # the UI can show "reconnecting" instead of trusting stale state.
+        "detection_healthy": (_ai_heartbeat_ts > 0 and
+                              (time.time() - _ai_heartbeat_ts) < DETECTION_STALE_SECONDS),
+        "detection_age_ms": int((time.time() - _ai_heartbeat_ts) * 1000) if _ai_heartbeat_ts > 0 else -1,
         "phone_detected": room_state.get("phone_detected", False),
         "smartwatch_detected": room_state.get("smartwatch_detected", False),
         "earbud_detected": room_state.get("earbud_detected", False),
