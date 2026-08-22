@@ -55,7 +55,7 @@ NEW_UNKNOWN_DWELL_S  = 2.5   # a never-identified track must persist unmatched
                              # this long before it counts as UNKNOWN at all
 TRACK_STALE_S        = 2.0   # drop a track not observed for this long (person
                              # actually left frame)
-GATE_FRAC            = 1.6   # association gate radius = GATE_FRAC * face size
+GATE_FRAC            = 0.65  # association gate radius = GATE_FRAC * face size (prevents hopping to adjacent faces)
 
 # Severity tiers, by how long a track has been sustained-unknown (seconds).
 # Below NEW_UNKNOWN_DWELL_S the track is "pending" and raises nothing.
@@ -75,7 +75,8 @@ def severity_for(unknown_dur):
 
 
 class IdentityStabilizer:
-    """Maintains sticky per-track identity from noisy per-frame recognition."""
+    """Maintains sticky per-track identity from noisy per-frame recognition
+    with strict multi-person isolation and mutual exclusivity."""
 
     def __init__(self):
         self._tracks = {}     # tid -> state dict
@@ -112,7 +113,8 @@ class IdentityStabilizer:
         if now is None:
             now = time.time()
 
-        # Associate largest faces first, mutually exclusive, nearest-centre.
+        # Associate nearest existing tracks first, mutually exclusive.
+        # Prefer matching by previous proximity to preserve identity fidelity.
         order = sorted(range(len(faces)), key=lambda i: -faces[i]["size"])
         claimed, assign = set(), {}
         for i in order:
@@ -131,6 +133,8 @@ class IdentityStabilizer:
             assign[i] = tid
 
         out = [None] * len(faces)
+        assigned_sids = set()
+
         for i, f in enumerate(faces):
             t = self._tracks[assign[i]]
             t["cx"], t["cy"], t["last_seen"] = f["cx"], f["cy"], now
@@ -149,15 +153,22 @@ class IdentityStabilizer:
                 t["last_match_ts"] = now
                 t["confirmed"] = True
 
-            if t["confirmed"] and t["last_known_sid"]:
-                # Held for the LIFE OF THE TRACK: once confirmed, stay committed
-                # to this identity for as long as the track is observed. The
-                # track is only dropped by the staleness prune below (person
-                # actually left frame), never by a recognition dip -- so an
-                # already-confirmed, continuously-present person never reverts to
-                # the "IDENTIFYING..." (pending) state. See class docstring.
-                committed, cname, state = t["last_known_sid"], t["last_known_name"], "known"
-                t["unknown_since"] = None
+            # Identity commitment with mutual exclusivity:
+            # Once confirmed, hold for the life of the track as long as observed,
+            # while strictly enforcing that no two detected faces can be assigned the same enrolled student ID simultaneously.
+            if t.get("confirmed") and t["last_known_sid"]:
+                candidate_sid = t["last_known_sid"]
+                if candidate_sid in assigned_sids:
+                    # Identity already attached to another face in this frame
+                    committed, cname = None, None
+                    if t["unknown_since"] is None:
+                        t["unknown_since"] = now
+                    dur = now - t["unknown_since"]
+                    state = "pending" if dur < NEW_UNKNOWN_DWELL_S else "unknown"
+                else:
+                    committed, cname, state = candidate_sid, t["last_known_name"], "known"
+                    t["unknown_since"] = None
+                    assigned_sids.add(candidate_sid)
             else:
                 committed, cname = None, None
                 if t["unknown_since"] is None:

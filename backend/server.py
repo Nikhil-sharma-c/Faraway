@@ -2239,6 +2239,16 @@ def register():
             rejected.append(f"frame {idx+1}: no face")
             continue
 
+        # Enforce strict single-candidate clarity during biometric registration
+        if len(faces) > 1:
+            faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
+            primary_area = float(faces[0]["bbox"][2]) * float(faces[0]["bbox"][3])
+            runner_up_area = float(faces[1]["bbox"][2]) * float(faces[1]["bbox"][3])
+            # If multiple significant faces are detected, reject frame to prevent ambiguous enrollment corruption
+            if primary_area < 2.5 * runner_up_area or runner_up_area > 3000:
+                rejected.append(f"frame {idx+1}: multiple faces detected ({len(faces)} faces) — ensure only target candidate is in view")
+                continue
+
         # Sort detected faces by area descending to prioritize the primary subject in the foreground
         faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
 
@@ -4518,26 +4528,31 @@ def _ai_worker_loop():
         used_face_indices = set()
         face_dets = []   # authoritative face boxes handed to the per-frame tracker
 
-        # One-to-one nearest assignment between MediaPipe face observations and
-        # the identification worker's recognised faces. A global greedy match on
-        # centre distance WITH MUTUAL EXCLUSION stops two observed faces from
-        # binding to the same identity -- labels swapping/merging when people
-        # stand close together. Each recognised identity attaches to exactly one
-        # observed face (its nearest), and vice versa.
+        # Strict Bounding Box IoU and spatial containment assignment between MediaPipe
+        # face observations and the identification worker's recognized faces.
         obs_to_idf = {}
         _pairs = []
         for _oi, _obs in enumerate(face_obs_list):
             _ox, _oy = _obs.nose_xy
             _bx, _by, _bw, _bh = _obs.bbox
-            _reach = (max(_bw, _bh) * 1.2) ** 2
+            box_obs = (_bx, _by, _bx + _bw, _by + _bh)
+            max_c_dist = max(_bw, _bh) * 0.55
             for _fi, _idf in enumerate(id_faces):
                 _ix, _iy = _idf["cx"], _idf["cy"]
-                _d = (_ox - _ix) ** 2 + (_oy - _iy) ** 2
-                if _d < _reach or (_bx <= _ix <= _bx + _bw and _by <= _iy <= _by + _bh):
-                    _pairs.append((_d, _oi, _fi))
+                if "bbox" in _idf:
+                    ifx, ify, ifw, ifh = _idf["bbox"]
+                    box_idf = (ifx, ify, ifx + ifw, ify + ifh)
+                    iou = phone_detect._iou(box_obs, box_idf)
+                else:
+                    iou = 0.0
+                cdist = math.hypot(_ox - _ix, _oy - _iy)
+                inside = (_bx <= _ix <= _bx + _bw and _by <= _iy <= _by + _bh)
+                if iou >= 0.20 or (inside and cdist <= max_c_dist):
+                    cost = -iou * 100.0 + cdist
+                    _pairs.append((cost, _oi, _fi))
         _pairs.sort()
         _used_idf = set()
-        for _d, _oi, _fi in _pairs:
+        for _cost, _oi, _fi in _pairs:
             if _oi in obs_to_idf or _fi in _used_idf:
                 continue
             obs_to_idf[_oi] = _fi

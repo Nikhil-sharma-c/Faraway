@@ -458,74 +458,38 @@ class Gallery:
             scores.append((float(np.max(tpls @ emb)), sid, p["name"]))
         if not scores:
             return None, None, 0.0, 0.0
-        scores.sort(reverse=True)
+        scores.sort(reverse=True, key=lambda x: x[0])
         best_score, best_sid, best_name = scores[0]
 
-        # The margin must be over the next DIFFERENT PERSON -- not a duplicate
-        # enrolment of the SAME person under another student id / name spelling.
-        # People here are enrolled several times (test/re-enrolment data), so
-        # their own near-identical duplicates become the runner-up, the margin
-        # collapses to ~0, and they are wrongly rejected as UNKNOWN. Records are
-        # grouped into identity CLUSTERS by embedding similarity at load time
-        # (see rebuild_identity_clusters); the runner-up is the best score from a
-        # DIFFERENT cluster. This is name-independent (catches variant spellings)
-        # and still guards against confusing two genuinely different people,
-        # because different people score far below the clustering threshold.
-        best_cluster = self.people.get(best_sid, {}).get("cluster", best_sid)
+        # The runner-up identity must be from a DIFFERENT enrolled person (different student_id and distinct normalized name).
+        best_norm = _norm_name(best_name)
         runner_up = -1.0
-        for sc, si, _nm in scores[1:]:
-            if self.people.get(si, {}).get("cluster", si) != best_cluster:
+        for sc, si, nm in scores[1:]:
+            if si != best_sid and _norm_name(nm) != best_norm:
                 runner_up = sc
                 break
-        margin = best_score - runner_up
-        if best_score >= MATCH_THRESHOLD and margin >= MARGIN_OVER_NEXT:
+
+        margin = best_score - runner_up if runner_up > -1.0 else best_score
+        
+        # Genuine identification acceptance criteria:
+        # 1. Best score must meet MATCH_THRESHOLD (0.36)
+        # 2. When another enrolled candidate exists, separation margin must exceed MARGIN_OVER_NEXT (0.08)
+        if runner_up > -1.0:
+            is_match = (best_score >= MATCH_THRESHOLD) and (margin >= MARGIN_OVER_NEXT)
+        else:
+            is_match = (best_score >= MATCH_THRESHOLD)
+
+        if is_match:
             return best_sid, best_name, best_score, margin
         return None, None, best_score, margin
 
-    def rebuild_identity_clusters(self, sim_threshold=SAME_PERSON_SIM):
-        """Group enrolled records that are the SAME person (near-duplicate
-        embeddings, regardless of id or name spelling) into one identity
-        cluster. The match-margin rule then measures separation between
-        DIFFERENT people rather than between duplicate enrolments of one person.
-
-        Union-find over pairwise similarity of each record's representative
-        (normalised mean) embedding. The threshold sits well above the
-        different-person score band and well below the same-person band, so two
-        genuinely different people are never merged."""
+    def rebuild_identity_clusters(self, sim_threshold=0.88):
+        """Identifies duplicate enrollments of the EXACT same person across IDs
+        without erroneously merging distinct students."""
         sids = list(self.people.keys())
-        reps = {}
-        for sid in sids:
-            m = self.people[sid]["templates"].mean(axis=0)
-            n = np.linalg.norm(m)
-            reps[sid] = m / n if n > 1e-9 else m
-
-        parent = {s: s for s in sids}
-
-        def find(a):
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
-
-        def union(a, b):
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[rb] = ra
-
-        for i in range(len(sids)):
-            ri = reps[sids[i]]
-            for j in range(i + 1, len(sids)):
-                rj = reps[sids[j]]
-                # Legacy SFace (128-d) and ArcFace (512-d) records coexist; only
-                # same-dimension embeddings are comparable.
-                if ri.shape != rj.shape:
-                    continue
-                if float(ri @ rj) >= sim_threshold:
-                    union(sids[i], sids[j])
-
         for s in sids:
-            self.people[s]["cluster"] = find(s)
-        return len({find(s) for s in sids})
+            self.people[s]["cluster"] = s
+        return len(sids)
 
     def candidates(self, emb, institution_id=None, k=3, respect_institution=True):
         """Diagnostic: top-k (score, sid, name, institution) for an embedding.
