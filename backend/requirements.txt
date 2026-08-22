@@ -1,0 +1,8 @@
+flask
+flask-cors
+werkzeug
+numpy
+opencv-python
+psycopg2-binary
+webauthn==2.5.2
+python-dotenv

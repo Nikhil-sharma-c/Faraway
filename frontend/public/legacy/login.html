@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProctorAI — Multi-Tenant Authentication Portal</title>
+    <meta name="description" content="ProctorAI Enterprise Authentication Portal — Multi-Institution & Role-Based Proctoring Access.">
+    
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="theme.css">
+    <script src="theme.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+/* ═════════════════════════════════════════════════════════════════════
+   PROCTORAI — ENTERPRISE MULTI-TENANT AUTHENTICATION
+   DEEP GRAPHITE & STEEL CYAN ENTERPRISE THEME
+   ═════════════════════════════════════════════════════════════════════ */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg-base:        #06080c;
+    --bg-surface:     #0b0f17;
+    --bg-card:        #0e131d;
+    --bg-card-border: rgba(255, 255, 255, 0.08);
+    --bg-input:       #070a10;
+    --bg-input-focus: #0a0e16;
+
+    --border-subtle:  rgba(255, 255, 255, 0.06);
+    --border-mid:     rgba(255, 255, 255, 0.12);
+    --border-active:  rgba(56, 189, 248, 0.45);
+
+    --accent-blue:    #38bdf8;
+    --accent-dark:    #0284c7;
+    --accent-dim:     rgba(56, 189, 248, 0.08);
+    --cyan:           #00e5ff;
+
+    --success:        #10b981;
+    --success-dim:    rgba(16, 185, 129, 0.08);
+    --success-border: rgba(16, 185, 129, 0.25);
+
+    --danger:         #f43f5e;
+    --danger-dim:     rgba(244, 63, 94, 0.08);
+    --danger-border:  rgba(244, 63, 94, 0.3);
+
+    --t1:             #f8fafc;
+    --t2:             #94a3b8;
+    --t3:             #64748b;
+    --t4:             #334155;
+
+    --font:           'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --mono:           'JetBrains Mono', 'SF Mono', Consolas, monospace;
+}
+
+html, body {
+    width: 100%;
+    min-height: 100vh;
+    font-family: var(--font);
+    background-color: var(--bg-base);
+    color: var(--t1);
+    line-height: 1.5;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── SUBTLE BACKGROUND DEPTH ── */
+.bg-canvas {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+}
+
+.bg-radial-ambient {
+    position: absolute;
+    top: -10%;
+    left: 25%;
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, rgba(14, 28, 48, 0.35) 0%, rgba(6, 8, 12, 0) 70%);
+    filter: blur(80px);
+}
+
+.bg-grid {
+    position: absolute;
+    inset: 0;
+    background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, #000 30%, transparent 90%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, #000 30%, transparent 90%);
+}
+
+/* ── ROOT APP WRAPPER ── */
+.app-layout {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 3rem 3.5rem;
+    align-items: center;
+    gap: 4.5rem;
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+   LEFT HERO COLUMN: BRANDING & AI ARCHITECTURE
+   ═════════════════════════════════════════════════════════════════════ */
+.hero-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+    max-width: 580px;
+    padding: 1rem 0;
+}
+
+.brand-badge-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.75rem;
+}
+
+.brand-icon-box {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: #0b111a;
+    border: 1px solid var(--border-mid);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-blue);
+}
+
+.status-live-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 99px;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-family: var(--mono);
+    color: var(--accent-blue);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    box-shadow: 0 0 8px var(--accent-blue);
+    animation: livePulse 2s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.6; }
+}
+
+.hero-heading {
+    font-size: 3.2rem;
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    line-height: 1.05;
+    color: #ffffff;
+    margin-bottom: 0.5rem;
+}
+
+.hero-subhead {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--accent-blue);
+    letter-spacing: -0.01em;
+    margin-bottom: 1rem;
+}
+
+.hero-lead {
+    font-size: 0.95rem;
+    color: var(--t2);
+    line-height: 1.6;
+    margin-bottom: 2rem;
+}
+
+/* Technical Schematic Canvas */
+.ai-reticle-canvas {
+    position: relative;
+    width: 100%;
+    height: 140px;
+    background: #080d15;
+    border: 1px solid var(--border-mid);
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.reticle-corner {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-color: var(--accent-blue);
+    border-style: solid;
+}
+.rc-tl { top: 8px; left: 8px; border-width: 2px 0 0 2px; }
+.rc-tr { top: 8px; right: 8px; border-width: 2px 2px 0 0; }
+.rc-bl { bottom: 8px; left: 8px; border-width: 0 0 2px 2px; }
+.rc-br { bottom: 8px; right: 8px; border-width: 0 2px 2px 0; }
+
+.laser-scan-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-blue), transparent);
+    box-shadow: 0 0 10px var(--accent-blue);
+    animation: scanVertical 3s ease-in-out infinite;
+}
+
+@keyframes scanVertical {
+    0%, 100% { top: 0%; opacity: 0.2; }
+    50% { top: 96%; opacity: 0.9; }
+}
+
+.optical-center-box {
+    width: 48px;
+    height: 48px;
+    border: 1px dashed rgba(56, 189, 248, 0.4);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-blue);
+}
+
+.ai-spec-tag {
+    position: absolute;
+    bottom: 8px;
+    left: 12px;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--t3);
+    letter-spacing: 0.08em;
+}
+
+.ai-lock-tag {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--success);
+    letter-spacing: 0.08em;
+}
+
+/* Capability Pills Grid */
+.caps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+}
+
+.cap-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 0.75rem 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.cap-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(56, 189, 248, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-blue);
+    flex-shrink: 0;
+}
+
+.cap-text {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.cap-title {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--t1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cap-sub {
+    font-size: 0.65rem;
+    color: var(--t3);
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+   RIGHT COLUMN: ROLE-BASED AUTHENTICATION CARD
+   ═════════════════════════════════════════════════════════════════════ */
+.auth-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+.auth-card {
+    position: relative;
+    width: 100%;
+    max-width: 500px;
+    background: var(--bg-card);
+    border: 1px solid var(--bg-card-border);
+    border-top: 1px solid var(--border-mid);
+    border-radius: 18px;
+    padding: 2.25rem 2.5rem;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+}
+
+.card-header-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 99px;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    font-size: 0.65rem;
+    font-weight: 700;
+    font-family: var(--mono);
+    color: var(--accent-blue);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+}
+
+.card-title {
+    font-size: 1.55rem;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.35rem;
+}
+
+.card-subtitle {
+    font-size: 0.84rem;
+    color: var(--t2);
+    line-height: 1.45;
+    margin-bottom: 1.5rem;
+}
+
+/* ── ROLE SELECTOR TABS ── */
+.role-tabs-wrap {
+    display: flex;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-mid);
+    border-radius: 10px;
+    padding: 0.25rem;
+    margin-bottom: 1.5rem;
+    gap: 0.25rem;
+}
+
+.role-tab-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--t2);
+    font-size: 0.82rem;
+    font-weight: 700;
+    font-family: var(--font);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.role-tab-btn:hover {
+    color: var(--t1);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.role-tab-btn.active {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: rgba(56, 189, 248, 0.4);
+    box-shadow: 0 2px 10px rgba(2, 132, 199, 0.3);
+}
+
+/* ── FORM CONTROLS ── */
+.form-group {
+    margin-bottom: 1.15rem;
+}
+
+.form-label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--t2);
+    margin-bottom: 0.4rem;
+}
+
+.input-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.form-input, .form-select {
+    width: 100%;
+    padding: 0.82rem 1rem 0.82rem 2.45rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-mid);
+    background: var(--bg-input);
+    color: var(--t1);
+    font-family: var(--font);
+    font-size: 0.86rem;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.form-select {
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%2394a3b8' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+}
+
+.form-input.has-toggle {
+    padding-right: 2.75rem;
+}
+
+.input-icon-leading {
+    position: absolute;
+    left: 0.9rem;
+    color: var(--t3);
+    pointer-events: none;
+    transition: color 0.2s;
+}
+
+.form-input:hover, .form-select:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.form-input:focus, .form-select:focus {
+    border-color: var(--accent-blue);
+    background: var(--bg-input-focus);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+}
+
+.form-input:focus ~ .input-icon-leading, .form-select:focus ~ .input-icon-leading {
+    color: var(--accent-blue);
+}
+
+.form-input::placeholder {
+    color: var(--t3);
+    font-size: 0.82rem;
+}
+
+/* Password Toggle Button */
+.pwd-toggle-btn {
+    position: absolute;
+    right: 0.75rem;
+    background: transparent;
+    border: none;
+    color: var(--t3);
+    cursor: pointer;
+    padding: 0.35rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: color 0.2s;
+}
+
+.pwd-toggle-btn:hover {
+    color: var(--t1);
+}
+
+/* ── SUBMIT CTA BUTTON ── */
+.btn-submit {
+    width: 100%;
+    background: #0284c7;
+    color: #ffffff;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    padding: 0.9rem 1.4rem;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 0.88rem;
+    font-family: var(--font);
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    box-shadow: 0 4px 16px rgba(2, 132, 199, 0.25);
+}
+
+.btn-submit:hover:not(:disabled) {
+    background: #0369a1;
+    border-color: var(--accent-blue);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.3);
+}
+
+.btn-submit:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.btn-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* ── STATUS BANNERS & NOTIFICATIONS ── */
+.status-banner {
+    display: none;
+    margin-top: 1.15rem;
+    padding: 0.75rem 0.95rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: left;
+    animation: bannerFade 0.2s ease-out;
+}
+
+@keyframes bannerFade {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.status-banner.error {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    background: var(--danger-dim);
+    border: 1px solid var(--danger-border);
+    color: #fecdd3;
+    animation: shakeError 0.3s ease-in-out;
+}
+
+@keyframes shakeError {
+    0%, 100% { transform: translateX(0); }
+    25%, 75% { transform: translateX(-3px); }
+    50% { transform: translateX(3px); }
+}
+
+.status-banner.success {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    background: var(--success-dim);
+    border: 1px solid var(--success-border);
+    color: #a7f3d0;
+}
+
+/* ── INSTITUTION SETUP SHORTCUT LINK ── */
+.setup-inst-prompt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 1.25rem;
+    padding: 0.65rem 0.85rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-subtle);
+    font-size: 0.72rem;
+    color: var(--t3);
+}
+
+.setup-inst-prompt a {
+    color: var(--accent-blue);
+    text-decoration: none;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.setup-inst-prompt a:hover {
+    text-decoration: underline;
+}
+
+/* ── CARD FOOTER ── */
+.card-footer-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.footer-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--t3);
+    text-decoration: none;
+    font-size: 0.74rem;
+    font-weight: 600;
+    transition: color 0.2s;
+}
+
+.footer-link:hover {
+    color: var(--accent-blue);
+}
+
+.footer-shield-tag {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--t4);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ── SPINNER ── */
+.lucide-spin {
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* ── RESPONSIVE ── */
+@media (max-width: 1080px) {
+    .app-layout {
+        grid-template-columns: 1fr;
+        gap: 2.5rem;
+        padding: 2.5rem 1.5rem;
+        max-width: 520px;
+    }
+    .hero-col {
+        padding: 0;
+        text-align: center;
+        align-items: center;
+    }
+    .brand-badge-wrap {
+        justify-content: center;
+    }
+    .hero-heading {
+        font-size: 2.4rem;
+    }
+    .ai-reticle-canvas {
+        display: none;
+    }
+    .caps-grid {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .app-layout {
+        padding: 1.5rem 1rem;
+    }
+    .auth-card {
+        padding: 1.75rem 1.25rem;
+        border-radius: 16px;
+    }
+    .caps-grid {
+        grid-template-columns: 1fr;
+    }
+    .hero-heading {
+        font-size: 2rem;
+    }
+}
+    </style>
+</head>
+<body>
+
+    <!-- Theme Toggle -->
+    <div style="position: fixed; top: 1.25rem; right: 1.5rem; z-index: 999;">
+        <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle dark/light mode" title="Toggle theme">
+            <span data-theme-icon><i data-lucide="sun" style="width:15px;height:15px;"></i></span>
+        </button>
+    </div>
+
+    <!-- Subtle Background Grid Layer -->
+    <div class="bg-canvas">
+        <div class="bg-radial-ambient"></div>
+        <div class="bg-grid"></div>
+    </div>
+
+    <!-- Main Two-Column Enterprise Layout -->
+    <main class="app-layout">
+
+        <!-- ═ LEFT COLUMN: BRANDING & AI ARCHITECTURE ═ -->
+        <section class="hero-col">
+            <div>
+                <!-- Brand Badge -->
+                <div class="brand-badge-wrap">
+                    <div class="brand-icon-box">
+                        <i data-lucide="shield-check" style="width:20px;height:20px;"></i>
+                    </div>
+                    <div class="status-live-tag">
+                        <div class="pulse-dot"></div>
+                        <span>Multi-Tenant Operations Active</span>
+                    </div>
+                </div>
+
+                <!-- Brand Typography -->
+                <h1 class="hero-heading">PROCTORAI</h1>
+                <div class="hero-subhead">AI-Powered Multi-Tenant Examination Defense</div>
+                <p class="hero-lead">
+                    Enterprise Examination Security Infrastructure. Multi-institution isolation, real-time biometric verification, neural gaze telemetry, and role-authorized command operations.
+                </p>
+
+                <!-- Technical Schematic Box -->
+                <div class="ai-reticle-canvas">
+                    <div class="reticle-corner rc-tl"></div>
+                    <div class="reticle-corner rc-tr"></div>
+                    <div class="reticle-corner rc-bl"></div>
+                    <div class="reticle-corner rc-br"></div>
+                    <div class="laser-scan-line"></div>
+
+                    <div class="optical-center-box">
+                        <i data-lucide="scan-face" style="width:20px;height:20px;"></i>
+                    </div>
+
+                    <span class="ai-spec-tag">ISOLATED TENANT PIPELINE</span>
+                    <span class="ai-lock-tag">SYSTEM READY</span>
+                </div>
+
+                <!-- Capability Highlight Pills -->
+                <div class="caps-grid">
+                    <div class="cap-item">
+                        <div class="cap-icon">
+                            <i data-lucide="building-2" style="width:14px;height:14px;"></i>
+                        </div>
+                        <div class="cap-text">
+                            <span class="cap-title">Multi-Institution</span>
+                            <span class="cap-sub">Strict Isolation</span>
+                        </div>
+                    </div>
+
+                    <div class="cap-item">
+                        <div class="cap-icon">
+                            <i data-lucide="shield-alert" style="width:14px;height:14px;"></i>
+                        </div>
+                        <div class="cap-text">
+                            <span class="cap-title">Role-Based RBAC</span>
+                            <span class="cap-sub">Admin / Faculty</span>
+                        </div>
+                    </div>
+
+                    <div class="cap-item">
+                        <div class="cap-icon">
+                            <i data-lucide="user-check" style="width:14px;height:14px;"></i>
+                        </div>
+                        <div class="cap-text">
+                            <span class="cap-title">Face Biometrics</span>
+                            <span class="cap-sub">ArcFace Multi-Tpl</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Meta -->
+            <div style="font-size:0.72rem;color:var(--t3);margin-top:2rem;">
+                ProctorAI Enterprise Platform &copy; 2026 &middot; Institutional Security Architecture
+            </div>
+        </section>
+
+
+        <!-- ═ RIGHT COLUMN: AUTHENTICATION CARD ═ -->
+        <section class="auth-col">
+            
+            <div class="auth-card" id="authCard">
+                
+                <!-- Card Header Top Badge -->
+                <div class="card-header-badge" id="cardRoleBadge">
+                    <i data-lucide="shield" style="width:11px;height:11px;"></i>
+                    <span id="roleBadgeText">FACULTY PROCTOR ACCESS</span>
+                </div>
+
+                <h2 class="card-title" id="authCardTitle">Sign In to ProctorAI</h2>
+                <p class="card-subtitle" id="authCardSubtitle">Select your authorized role to access institutional examination monitoring.</p>
+
+                <!-- Role Selection Tabs -->
+                <div class="role-tabs-wrap" role="tablist">
+                    <button type="button" class="role-tab-btn active" id="tabFaculty" role="tab" aria-selected="true">
+                        <i data-lucide="user-check" style="width:14px;height:14px;"></i>
+                        <span>Faculty Login</span>
+                    </button>
+                    <button type="button" class="role-tab-btn" id="tabAdmin" role="tab" aria-selected="false">
+                        <i data-lucide="shield" style="width:14px;height:14px;"></i>
+                        <span>Admin Login</span>
+                    </button>
+                </div>
+
+                <!-- Unified Authentication Form -->
+                <form id="authLoginForm" novalidate>
+
+                    <!-- Institution Selector (Visible in Faculty mode) -->
+                    <div class="form-group" id="institutionGroup">
+                        <label class="form-label" for="institutionSelect">Select Institution</label>
+                        <div class="input-container">
+                            <select id="institutionSelect" class="form-select" required>
+                                <option value="" disabled selected>Loading available institutions...</option>
+                            </select>
+                            <i data-lucide="building-2" class="input-icon-leading" style="width:15px;height:15px;"></i>
+                        </div>
+                    </div>
+
+                    <!-- Email / Username Input Field -->
+                    <div class="form-group">
+                        <label class="form-label" for="usernameInput" id="usernameLabel">Faculty Email / Username</label>
+                        <div class="input-container">
+                            <input 
+                                type="text" 
+                                id="usernameInput" 
+                                class="form-input" 
+                                placeholder="proctor@institution.edu" 
+                                required 
+                                autocomplete="username"
+                                spellcheck="false"
+                            >
+                            <i data-lucide="mail" id="userLeadingIcon" class="input-icon-leading" style="width:15px;height:15px;"></i>
+                        </div>
+                    </div>
+
+                    <!-- Password Input Field with Show/Hide Toggle -->
+                    <div class="form-group">
+                        <label class="form-label" for="passwordInput">Password</label>
+                        <div class="input-container">
+                            <input 
+                                type="password" 
+                                id="passwordInput" 
+                                class="form-input has-toggle" 
+                                placeholder="••••••••••••" 
+                                required 
+                                autocomplete="current-password"
+                            >
+                            <i data-lucide="key" class="input-icon-leading" style="width:15px;height:15px;"></i>
+                            <button 
+                                type="button" 
+                                class="pwd-toggle-btn" 
+                                id="pwdToggleBtn" 
+                                aria-label="Toggle password visibility"
+                            >
+                                <i data-lucide="eye" id="pwdEyeIcon" style="width:15px;height:15px;"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" class="btn-submit" id="authSubmitBtn">
+                        <i data-lucide="log-in" style="width:15px;height:15px;"></i>
+                        <span id="btnSubmitText">Authenticate &amp; Enter SOC</span>
+                    </button>
+                </form>
+
+                <!-- Status & Error Alert Notification Container -->
+                <div id="statusBanner" class="status-banner"></div>
+
+                <!-- Institution Setup Shortcut -->
+                <div class="setup-inst-prompt">
+                    <span>New institution or exam center?</span>
+                    <a href="setup_institution.html">
+                        <span>Setup Institution</span>
+                        <i data-lucide="arrow-right" style="width:11px;height:11px;"></i>
+                    </a>
+                </div>
+
+                <!-- Footer Navigation -->
+                <div class="card-footer-nav">
+                    <a href="index.html" class="footer-link">
+                        <i data-lucide="arrow-left" style="width:12px;height:12px;"></i>
+                        <span>Platform Overview</span>
+                    </a>
+                    <span class="footer-shield-tag">ENTERPRISE RBAC &bull; SECURE</span>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // State & DOM Elements
+        let currentRole = 'FACULTY'; // 'FACULTY' | 'ADMIN'
+        let availableInstitutions = [];
+        const API_BASE = window.location.port === '5500' ? 'http://127.0.0.1:5001' : '';
+
+        const tabFaculty = document.getElementById('tabFaculty');
+        const tabAdmin = document.getElementById('tabAdmin');
+        const institutionGroup = document.getElementById('institutionGroup');
+        const institutionSelect = document.getElementById('institutionSelect');
+        const usernameLabel = document.getElementById('usernameLabel');
+        const usernameInput = document.getElementById('usernameInput');
+        const passwordInput = document.getElementById('passwordInput');
+        const roleBadgeText = document.getElementById('roleBadgeText');
+        const btnSubmitText = document.getElementById('btnSubmitText');
+        const authSubmitBtn = document.getElementById('authSubmitBtn');
+        const statusBanner = document.getElementById('statusBanner');
+        const pwdToggleBtn = document.getElementById('pwdToggleBtn');
+        const pwdEyeIcon = document.getElementById('pwdEyeIcon');
+        const authForm = document.getElementById('authLoginForm');
+
+        // ── LOAD REAL INSTITUTIONS FROM BACKEND ──
+        async function loadInstitutions() {
+            try {
+                const res = await fetch(`${API_BASE}/api/institutions`);
+                if (res.ok) {
+                    const list = await res.json();
+                    availableInstitutions = list;
+                }
+            } catch (err) {
+                console.warn('Could not fetch institutions list:', err);
+            }
+
+            // Fallback to local setup data if empty
+            if (!availableInstitutions || availableInstitutions.length === 0) {
+                const raw = sessionStorage.getItem('proctorai_institution_data') || localStorage.getItem('proctorai_institution_data');
+                if (raw) {
+                    try {
+                        const parsed = JSON.parse(raw);
+                        availableInstitutions = [{
+                            institution_id: parsed.institution_id || "INST-001",
+                            institution_name: parsed.institutionName || "Configured Institution",
+                            institution_type: parsed.institutionType || "University",
+                            city: parsed.city || "",
+                            country: parsed.country || ""
+                        }];
+                    } catch (e) {}
+                }
+            }
+
+            // If still empty, add default
+            if (!availableInstitutions || availableInstitutions.length === 0) {
+                availableInstitutions = [{
+                    institution_id: "INST-001",
+                    institution_name: "Apex Institute of Technology",
+                    institution_type: "University",
+                    city: "San Francisco",
+                    country: "United States"
+                }];
+            }
+
+            renderInstitutionOptions();
+        }
+
+        function renderInstitutionOptions() {
+            institutionSelect.innerHTML = '';
+            
+            // Check stored institution preference
+            const stored = sessionStorage.getItem('proctorai_institution_data') || localStorage.getItem('proctorai_institution_data');
+            let preferredId = null;
+            if (stored) {
+                try { preferredId = JSON.parse(stored).institution_id; } catch(e){}
+            }
+
+            availableInstitutions.forEach((inst, idx) => {
+                const opt = document.createElement('option');
+                opt.value = inst.institution_id;
+                const loc = inst.city ? ` (${inst.city}, ${inst.country})` : '';
+                opt.textContent = `${inst.institution_name}${loc}`;
+                if (preferredId === inst.institution_id || (!preferredId && idx === 0)) {
+                    opt.selected = true;
+                }
+                institutionSelect.appendChild(opt);
+            });
+        }
+
+        // ── TAB SWITCHING ──
+        tabFaculty.addEventListener('click', () => setRole('FACULTY'));
+        tabAdmin.addEventListener('click', () => setRole('ADMIN'));
+
+        function setRole(role) {
+            currentRole = role;
+            hideBanner();
+
+            if (role === 'FACULTY') {
+                tabFaculty.classList.add('active');
+                tabFaculty.setAttribute('aria-selected', 'true');
+                tabAdmin.classList.remove('active');
+                tabAdmin.setAttribute('aria-selected', 'false');
+
+                institutionGroup.style.display = 'block';
+                usernameLabel.textContent = 'Faculty Email / Username';
+                usernameInput.placeholder = 'faculty@institution.edu';
+                roleBadgeText.textContent = 'FACULTY PROCTOR ACCESS';
+                btnSubmitText.textContent = 'Authenticate & Enter SOC';
+            } else {
+                tabAdmin.classList.add('active');
+                tabAdmin.setAttribute('aria-selected', 'true');
+                tabFaculty.classList.remove('active');
+                tabFaculty.setAttribute('aria-selected', 'false');
+
+                institutionGroup.style.display = 'none';
+                usernameLabel.textContent = 'Administrator Username / Email';
+                usernameInput.placeholder = 'admin';
+                roleBadgeText.textContent = 'PLATFORM / INSTITUTION ADMIN';
+                btnSubmitText.textContent = 'Authenticate & Enter Command';
+            }
+            lucide.createIcons();
+        }
+
+        // ── PASSWORD VISIBILITY TOGGLE ──
+        pwdToggleBtn.addEventListener('click', () => {
+            const isPassword = passwordInput.type === 'password';
+            passwordInput.type = isPassword ? 'text' : 'password';
+            pwdEyeIcon.setAttribute('data-lucide', isPassword ? 'eye-off' : 'eye');
+            lucide.createIcons();
+        });
+
+        // ── BANNER NOTIFICATION HELPERS ──
+        function showBanner(msg, type = 'error') {
+            statusBanner.className = `status-banner ${type}`;
+            const iconName = type === 'error' ? 'alert-circle' : 'check-circle-2';
+            statusBanner.innerHTML = `
+                <i data-lucide="${iconName}" style="width:15px;height:15px;flex-shrink:0;margin-top:2px;"></i>
+                <span>${msg}</span>
+            `;
+            statusBanner.style.display = 'flex';
+            lucide.createIcons();
+        }
+
+        function hideBanner() {
+            statusBanner.style.display = 'none';
+        }
+
+        // ── FORM SUBMISSION & BACKEND AUTHENTICATION ──
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideBanner();
+
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+            const institutionId = currentRole === 'FACULTY' ? institutionSelect.value : null;
+
+            if (!username) {
+                showBanner('Please enter your username or email.', 'error');
+                usernameInput.focus();
+                return;
+            }
+
+            if (!password) {
+                showBanner('Please enter your password.', 'error');
+                passwordInput.focus();
+                return;
+            }
+
+            authSubmitBtn.disabled = true;
+            authSubmitBtn.innerHTML = '<i data-lucide="loader" class="lucide-spin" style="width:15px;height:15px;"></i> <span>Authenticating Clearance...</span>';
+            lucide.createIcons();
+
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password,
+                        role: currentRole,
+                        institution_id: institutionId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    showBanner(`Authentication successful. Redirecting to ${data.role === 'ADMIN' ? 'Admin Portal' : 'Proctoring Console'}...`, 'success');
+                    
+                    // Store non-sensitive session metadata
+                    try {
+                        sessionStorage.setItem('proctorai_auth_user', JSON.stringify(data.user || {}));
+                        sessionStorage.setItem('proctorai_role', data.role);
+                        sessionStorage.setItem('proctorai_inst_id', data.user ? data.user.institution_id : institutionId);
+                        localStorage.setItem('proctorai_demo_auth', 'true');
+                    } catch(err){}
+
+                    document.body.style.opacity = '0';
+                    document.body.style.transition = 'opacity 0.25s ease';
+
+                    setTimeout(() => {
+                        const currentParams = new URLSearchParams(window.location.search);
+                        const redirectTarget = currentParams.get('redirect');
+                        if (redirectTarget && (redirectTarget.endsWith('.html') || redirectTarget.startsWith('/'))) {
+                            window.location.href = redirectTarget;
+                        } else {
+                            window.location.href = data.redirect || (data.role === 'ADMIN' ? 'admin.html' : 'monitoring.html');
+                        }
+                    }, 250);
+                } else {
+                    authSubmitBtn.disabled = false;
+                    authSubmitBtn.innerHTML = `<i data-lucide="log-in" style="width:15px;height:15px;"></i> <span>${btnSubmitText.textContent}</span>`;
+                    lucide.createIcons();
+                    showBanner(data.error || 'Invalid credentials or unauthorized institution clearance.', 'error');
+                }
+            } catch (err) {
+                console.error('Authentication request error:', err);
+                authSubmitBtn.disabled = false;
+                authSubmitBtn.innerHTML = `<i data-lucide="log-in" style="width:15px;height:15px;"></i> <span>${btnSubmitText.textContent}</span>`;
+                lucide.createIcons();
+                showBanner('Network error connecting to security server. Please retry.', 'error');
+            }
+        });
+
+        // Initialize on page load
+        loadInstitutions();
+    </script>
+</body>
+</html>

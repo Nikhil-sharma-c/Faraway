@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reviewable Action Timeline | ProctorAI</title>
+    <meta name="description" content="Forensic Search & Discovery Reviewable Action Timeline for AI Examination Integrity Platform.">
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="replay.css">
+    <link rel="stylesheet" href="theme.css">
+    <script src="theme.js"></script>
+    <script src="https://unpkg.com/lucide@0.462.0"></script>
+</head>
+<body>
+    <!-- Back to SOC Button -->
+    <a href="monitoring.html" class="back-btn" id="backBtn" aria-label="Back to Monitoring SOC">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+        Back to SOC
+    </a>
+
+    <div class="app-container">
+        <!-- ═════════════════════════════════════════════════════════════════
+             LEVEL 1: HEADER
+             ═════════════════════════════════════════════════════════════════ -->
+        <header class="glass-header">
+            <div class="header-left">
+                <div class="brand-badge-box">
+                    <i data-lucide="activity" class="accent-icon"></i>
+                </div>
+                <div>
+                    <div class="title-with-badge">
+                        <h1>Reviewable Action Timeline</h1>
+                        <span class="badge badge-cyan">FORENSIC SEARCH &amp; DISCOVERY</span>
+                    </div>
+                    <p class="header-sub">Chronological audit ledger of student actions, biometric validations, telemetry alerts &amp; state updates</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="session-status" id="sessionStatusPill">
+                    <span class="status-dot green"></span> Live Sync Active
+                </div>
+                <div class="replay-controls-header">
+                    <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle dark/light mode" title="Toggle theme">
+                        <span data-theme-icon><i data-lucide="sun" style="width:15px;height:15px;"></i></span>
+                    </button>
+                    <button class="btn-primary" id="exportTimelineBtn" onclick="exportTimelineData()">
+                        <i data-lucide="download"></i> Export Timeline Log
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- ═════════════════════════════════════════════════════════════════
+             LEVEL 2: SEARCH & DISCOVERY COMMAND DECK
+             ═════════════════════════════════════════════════════════════════ -->
+        <section class="glass-panel search-discovery-deck">
+            <!-- ROW 1: Search Input & Primary Controls -->
+            <div class="search-row">
+                <div class="search-input-wrap">
+                    <i data-lucide="search" class="search-icon"></i>
+                    <input 
+                        type="text" 
+                        id="timelineSearchInput" 
+                        class="search-input" 
+                        placeholder="Search timeline by student name, ID (e.g. 1002, Alex), event (phone, gaze), status, or risk level..." 
+                        autocomplete="off"
+                        spellcheck="false"
+                    >
+                    <button type="button" class="clear-search-btn" id="clearSearchBtn" title="Clear search (Esc)" aria-label="Clear search">
+                        <i data-lucide="x"></i>
+                    </button>
+                    <div class="search-shortcut-hint">
+                        <kbd>/</kbd> to search
+                    </div>
+                </div>
+
+                <div class="search-aux-controls">
+                    <div class="control-group">
+                        <label for="sortOrderSelect" class="control-label">Order:</label>
+                        <select id="sortOrderSelect" class="select-glass">
+                            <option value="desc" selected>Newest First</option>
+                            <option value="asc">Oldest First (09:58 → 11:30)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="severityFilterSelect" class="control-label">Severity:</label>
+                        <select id="severityFilterSelect" class="select-glass">
+                            <option value="ALL" selected>All Severities</option>
+                            <option value="NORMAL">Normal</option>
+                            <option value="SUSPICIOUS">Suspicious</option>
+                            <option value="HIGH_RISK">High Risk</option>
+                        </select>
+                    </div>
+
+                    <button type="button" class="btn-refresh" id="refreshTimelineBtn" title="Refresh timeline data">
+                        <i data-lucide="refresh-cw"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ROW 2: Category Filter Chips -->
+            <div class="category-filters-row">
+                <span class="filter-group-label"><i data-lucide="filter" style="width:12px;height:12px;"></i> Categories:</span>
+                <div class="category-chips" id="categoryChips">
+                    <button type="button" class="cat-chip active" data-category="ALL">
+                        <span class="cat-name">ALL</span>
+                        <span class="cat-count" id="count-ALL">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="IDENTITY">
+                        <span class="cat-dot id-dot"></span>
+                        <span class="cat-name">IDENTITY</span>
+                        <span class="cat-count" id="count-IDENTITY">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="SESSION">
+                        <span class="cat-dot sess-dot"></span>
+                        <span class="cat-name">SESSION</span>
+                        <span class="cat-count" id="count-SESSION">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="AI DETECTION">
+                        <span class="cat-dot ai-dot"></span>
+                        <span class="cat-name">AI DETECTION</span>
+                        <span class="cat-count" id="count-AI_DETECTION">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="ALERT">
+                        <span class="cat-dot alert-dot"></span>
+                        <span class="cat-name">ALERT</span>
+                        <span class="cat-count" id="count-ALERT">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="RISK">
+                        <span class="cat-dot risk-dot"></span>
+                        <span class="cat-name">RISK</span>
+                        <span class="cat-count" id="count-RISK">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="DEVICE">
+                        <span class="cat-dot dev-dot"></span>
+                        <span class="cat-name">DEVICE</span>
+                        <span class="cat-count" id="count-DEVICE">0</span>
+                    </button>
+                    <button type="button" class="cat-chip" data-category="GAZE">
+                        <span class="cat-dot gaze-dot"></span>
+                        <span class="cat-name">GAZE</span>
+                        <span class="cat-count" id="count-GAZE">0</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ROW 3: Status Summary & Quick Queries -->
+            <div class="search-status-bar" id="searchStatusBar">
+                <div class="results-summary">
+                    <span id="resultsCountText">Showing 15 of 15 recorded timeline events</span>
+                    <span class="filter-tag-pill" id="activeFilterTag" style="display:none;"></span>
+                </div>
+                <div class="quick-chips">
+                    <span class="quick-lbl">Quick Queries:</span>
+                    <button type="button" class="quick-chip" onclick="applyQuickSearch('phone')">📱 "phone"</button>
+                    <button type="button" class="quick-chip" onclick="applyQuickSearch('Nalin')">👤 "Nalin"</button>
+                    <button type="button" class="quick-chip" onclick="applyQuickSearch('high risk')">🚨 "high risk"</button>
+                    <button type="button" class="quick-chip" onclick="applyQuickSearch('gaze')">👀 "gaze"</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═════════════════════════════════════════════════════════════════
+             MAIN WORKSPACE: TIMELINE (HERO) & EVENT INSPECTOR (RIGHT)
+             ═════════════════════════════════════════════════════════════════ -->
+        <div class="main-grid">
+            <!-- ═════════════════════════════════════════════════════════════
+                 LEVEL 3: REVIEWABLE ACTION TIMELINE (HERO FEATURE)
+                 ═════════════════════════════════════════════════════════════ -->
+            <section class="column-main">
+                <div class="glass-panel timeline-container">
+                    <div class="section-header">
+                        <div class="header-title-flex">
+                            <i data-lucide="list-ordered" class="accent-icon"></i>
+                            <div>
+                                <h2>Chronological Action &amp; State Timeline</h2>
+                                <p class="sec-desc">Select any event to review detailed root cause, state transitions, and evidence</p>
+                            </div>
+                        </div>
+                        <div class="timeline-legend">
+                            <span class="legend-item"><span class="legend-dot green"></span> Normal</span>
+                            <span class="legend-item"><span class="legend-dot amber"></span> Suspicious</span>
+                            <span class="legend-item"><span class="legend-dot red"></span> High Risk</span>
+                        </div>
+                    </div>
+
+                    <!-- Scrollable Reviewable Timeline Track -->
+                    <div class="timeline-track" id="actionTimelineTrack">
+                        <!-- Dynamically populated by replay.js from /api/timeline -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═════════════════════════════════════════════════════════════
+                 LEVEL 4: SELECTED EVENT INSPECTOR
+                 ═════════════════════════════════════════════════════════════ -->
+            <aside class="column-side">
+                <section class="glass-panel event-details" id="eventDetailsPanel">
+                    <div class="section-header">
+                        <div class="header-title-flex">
+                            <i data-lucide="scan-search" class="accent-icon"></i>
+                            <div>
+                                <h3>Selected Event Inspector</h3>
+                                <p class="sec-desc">Forensic breakdown of selected incident</p>
+                            </div>
+                        </div>
+                        <span class="badge badge-danger" id="inspectorSeverityBadge">HIGH RISK</span>
+                    </div>
+
+                    <div class="details-content" id="inspectorContent">
+                        <!-- 1. Event Header & Category -->
+                        <div class="inspector-meta-row">
+                            <div class="detail-time danger-text" id="inspectorTime">10:42:31</div>
+                            <span class="badge badge-outline" id="inspectorCategoryBadge">DEVICE</span>
+                        </div>
+
+                        <!-- 2. Event Title -->
+                        <h4 class="detail-title" id="inspectorTitle">PHONE DETECTED</h4>
+                        
+                        <!-- 3. Entity / Session Information -->
+                        <div class="inspector-student-card" id="inspectorStudentCard">
+                            <div class="stu-avatar-box" id="inspectorAvatar">NT</div>
+                            <div class="stu-info-box">
+                                <strong id="inspectorStudentName">Nalin Tuscano</strong>
+                                <span class="stu-id-tag" id="inspectorStudentId">Student ID: 1002</span>
+                                <span class="inst-tag" id="inspectorInst">Institution: INST-001</span>
+                            </div>
+                        </div>
+
+                        <!-- 4. Incident Summary & Root Cause -->
+                        <div class="inspector-desc-wrap">
+                            <label class="inspector-lbl">Incident Summary &amp; Description:</label>
+                            <p class="detail-desc" id="inspectorDesc">
+                                Mobile device detected inside examination area near candidate workspace via YOLO11 neural detector.
+                            </p>
+                        </div>
+
+                        <!-- 5. Recorded State Transitions Card (X → Y) -->
+                        <div class="state-changes-card" id="inspectorStateChanges">
+                            <div class="sc-header">
+                                <i data-lucide="git-commit" style="width:13px;height:13px;color:var(--cyan);"></i>
+                                <span>Recorded State Updates</span>
+                            </div>
+                            <div class="sc-grid" id="stateTransitionsGrid">
+                                <div class="sc-item">
+                                    <span class="sc-label">Risk Score</span>
+                                    <span class="sc-val danger-text">35 <span class="arr">&rarr;</span> 60</span>
+                                </div>
+                                <div class="sc-item">
+                                    <span class="sc-label">Trust Score</span>
+                                    <span class="sc-val warning-text">94% <span class="arr">&rarr;</span> 71%</span>
+                                </div>
+                                <div class="sc-item">
+                                    <span class="sc-label">Candidate Status</span>
+                                    <span class="sc-val">VERIFIED <span class="arr">&rarr;</span> UNDER REVIEW</span>
+                                </div>
+                                <div class="sc-item">
+                                    <span class="sc-label">Security Alert</span>
+                                    <span class="sc-val danger-text">NONE <span class="arr">&rarr;</span> CREATED</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 6. Available Telemetry -->
+                        <div class="telemetry-block" id="telemetryBlock">
+                            <div class="tel-header">
+                                <i data-lucide="cpu" style="width:13px;height:13px;color:var(--accent);"></i>
+                                <span>Event Telemetry</span>
+                            </div>
+                            <div class="tel-grid" id="telGrid">
+                                <div class="tel-item">
+                                    <span class="t-lbl">Confidence:</span>
+                                    <span class="t-val" id="telConf">89.4%</span>
+                                </div>
+                                <div class="tel-item">
+                                    <span class="t-lbl">Device / Event:</span>
+                                    <span class="t-val" id="telDevice">cell phone</span>
+                                </div>
+                                <div class="tel-item">
+                                    <span class="t-lbl">Gaze Direction:</span>
+                                    <span class="t-val" id="telGaze">DOWN-RIGHT</span>
+                                </div>
+                                <div class="tel-item">
+                                    <span class="t-lbl">Camera ID:</span>
+                                    <span class="t-val" id="telCam">CAM-01</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 7. Dedicated Incident Resolution Action Area -->
+                        <div class="inspector-action-row" id="inspectorActionRow">
+                            <button type="button" class="btn-resolve" id="resolveIncidentBtn" onclick="resolveCurrentEvent()">
+                                <i data-lucide="check-circle"></i>
+                                <span id="resolveBtnText">Acknowledge &amp; Resolve Incident</span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+        </div>
+
+        <!-- ═════════════════════════════════════════════════════════════════
+             LEVEL 5: SYNCHRONIZED CCTV & EVIDENCE REVIEW (DEDICATED SECTION)
+             ═════════════════════════════════════════════════════════════════ -->
+        <section class="glass-panel evidence-section" id="evidenceSection">
+            <div class="section-header evidence-hdr">
+                <div class="header-title-flex">
+                    <i data-lucide="video" class="accent-icon"></i>
+                    <div>
+                        <h3>Synchronized CCTV Evidence</h3>
+                        <p class="sec-desc">Session REC-9948271 | Recorded Examination Footage &amp; Telemetry Sync</p>
+                    </div>
+                </div>
+                <div class="playback-badge-row">
+                    <span class="badge badge-outline" id="playbackTimeDisplay">09:58:01</span>
+                    <span class="badge badge-success" id="playbackEventBadge">SESSION STARTED</span>
+                </div>
+            </div>
+
+            <div class="evidence-grid">
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <!-- Real HTML5 Video Player with Recorded Frame Poster -->
+                    <video 
+                        id="cctvVideoPlayer" 
+                        class="cctv-video-element" 
+                        preload="metadata" 
+                        playsinline
+                        poster="exam_room.jpg"
+                        aria-label="Synchronized CCTV Evidence Recording"
+                    >
+                        <source src="exam_room.mp4" type="video/mp4">
+                        <source src="cctv_recording.mp4" type="video/mp4">
+                        <source src="cctv_evidence.mp4" type="video/mp4">
+                        Your browser does not support the video element.
+                    </video>
+
+                    <!-- Synchronized AI Detection Bounding Box Overlay -->
+                    <div class="cctv-detection-box" id="cctvDetectionBox" style="display:none;">
+                        <span class="cctv-detection-label" id="cctvDetectionLabel">PHONE DETECTED · 89%</span>
+                    </div>
+
+                    <!-- CCTV HUD Top Bar -->
+                    <div class="cctv-hud-top">
+                        <span class="hud-tag" id="cctvCamTag">CAM-01 · 1080p</span>
+                        <span class="hud-tag rec-tag" id="cctvRecTag"><span class="rec-dot"></span> RECORDED</span>
+                        <div class="timestamp-overlay" id="playbackTimestamp">09:58:01</div>
+                    </div>
+
+                    <!-- Video State Overlay for Unavailable / Error State -->
+                    <div class="video-state-overlay" id="videoStateOverlay" style="display:none;">
+                        <i data-lucide="video-off" class="state-icon"></i>
+                        <span class="state-title" id="videoStateTitle">CCTV Recording Unavailable</span>
+                        <span class="state-sub" id="videoStateSub">No local CCTV video file found for session REC-9948271</span>
+                    </div>
+
+                    <!-- Active Event Notification Overlay Tag -->
+                    <div class="status-overlay danger-bg" id="playbackOverlayTag" style="display:none;">
+                        <i data-lucide="alert-triangle"></i> <span id="playbackOverlayText">Mobile Device Detected</span>
+                    </div>
+
+                    <!-- CCTV Evidence Status Indicator -->
+                    <div class="cctv-status-indicator" id="cctvStatusIndicator">
+                        <span class="indicator-dot"></span> <span id="cctvStatusText">CCTV EVIDENCE READY</span>
+                    </div>
+                </div>
+                
+                <div class="playback-controls">
+                    <div class="progress-container">
+                        <div class="progress-bar-bg" id="progressBarBg" role="slider" aria-label="CCTV timeline scrubber" tabindex="0">
+                            <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
+                            <div class="progress-handle" id="progressHandle" style="left: 0%"></div>
+                        </div>
+                        <div class="time-labels">
+                            <span id="sessionStartTimeLbl">09:58:01 (Session Start)</span>
+                            <span id="currentScrubTime">09:58:01 (Event 1/15)</span>
+                            <span id="sessionEndTimeLbl">11:30:00 (Session End)</span>
+                        </div>
+                    </div>
+                    <div class="controls-row">
+                        <div class="speed-control">
+                            <select class="select-glass" id="speedControl" aria-label="Playback Speed">
+                                <option value="0.5">0.5x Speed</option>
+                                <option value="1.0" selected>1.0x Speed</option>
+                                <option value="1.5">1.5x Speed</option>
+                                <option value="2.0">2.0x Speed</option>
+                            </select>
+                        </div>
+                        <div class="main-controls">
+                            <button class="btn-control" id="btnPrev" aria-label="Previous Event" title="Previous Event (k / ↑)"><i data-lucide="skip-back"></i></button>
+                            <button class="btn-control btn-play" id="btnPlayPause" aria-label="Play/Pause Video" title="Play / Pause"><i data-lucide="play"></i></button>
+                            <button class="btn-control" id="btnNext" aria-label="Next Event" title="Next Event (j / ↓)"><i data-lucide="skip-forward"></i></button>
+                        </div>
+                        <div class="volume-control">
+                            <button class="btn-control" id="btnVolume" aria-label="Toggle Audio" title="Audio"><i data-lucide="volume-2"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═════════════════════════════════════════════════════════════════
+             LEVEL 6: ANALYTICS & SUMMARY (COLLAPSIBLE SECONDARY SECTION)
+             ═════════════════════════════════════════════════════════════════ -->
+        <section class="glass-panel analytics-accordion-section" id="analyticsSection">
+            <button type="button" class="analytics-accordion-toggle" id="analyticsToggleBtn" onclick="toggleAnalyticsSection()" aria-expanded="false">
+                <div class="accordion-title-flex">
+                    <i data-lucide="bar-chart-2" style="width:16px;height:16px;color:var(--accent);"></i>
+                    <span>Analytics &amp; Summary</span>
+                    <span class="badge badge-outline" style="font-size:0.65rem;margin-left:0.5rem;">Audit Overview</span>
+                </div>
+                <div class="accordion-right-flex">
+                    <span class="kpi-mini-pill"><strong>15</strong> Total Events</span>
+                    <span class="kpi-mini-pill danger"><strong>4</strong> High Risk</span>
+                    <i data-lucide="chevron-down" class="accordion-chevron" id="analyticsChevron"></i>
+                </div>
+            </button>
+
+            <div class="analytics-collapsible-content" id="analyticsContent" style="display:none;">
+                <div class="analytics-kpi-grid">
+                    <div class="kpi-box">
+                        <span class="kpi-label">Total Recorded Events</span>
+                        <span class="kpi-value" id="kpiTotalEvents">15</span>
+                        <span class="kpi-sub">Across 09:58 – 11:30 session</span>
+                    </div>
+                    <div class="kpi-box danger">
+                        <span class="kpi-label">High Risk Incidents</span>
+                        <span class="kpi-value danger-text" id="kpiHighRisk">4</span>
+                        <span class="kpi-sub">Security breaches &amp; mobile phones</span>
+                    </div>
+                    <div class="kpi-box warning">
+                        <span class="kpi-label">Security Alerts</span>
+                        <span class="kpi-value warning-text" id="kpiAlerts">3</span>
+                        <span class="kpi-sub">Gaze deviations &amp; missing faces</span>
+                    </div>
+                    <div class="kpi-box cyan">
+                        <span class="kpi-label">Identity Verifications</span>
+                        <span class="kpi-value success-text" id="kpiIdentity">2</span>
+                        <span class="kpi-sub">Biometric &amp; enrollment checkpoints</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═════════════════════════════════════════════════════════════════
+             FOOTER
+             ═════════════════════════════════════════════════════════════════ -->
+        <footer class="glass-footer">
+            <div class="footer-left">
+                <i data-lucide="shield-check" class="accent-icon"></i>
+                <span>ProctorAI Enterprise | Reviewable Action Timeline Engine</span>
+            </div>
+            <div class="footer-right">
+                <span>Session: REC-9948271</span>
+                <span>SHA-256 Verified Immutable Audit Trail</span>
+            </div>
+        </footer>
+    </div>
+    
+    <script src="replay.js"></script>
+    <script>
+        // ═══════════════════════════════════════════════════════════════════
+        // DEMO AUTHENTICATION & SETUP CHECK
+        // ═══════════════════════════════════════════════════════════════════
+        (function checkAuth() {
+            const setupCompleted = sessionStorage.getItem('proctorai_setup_completed') || localStorage.getItem('proctorai_setup_completed');
+            const demoAuth = sessionStorage.getItem('proctorai_demo_auth') || localStorage.getItem('proctorai_demo_auth');
+
+            if (setupCompleted !== 'true') {
+                window.location.replace('setup_institution.html?redirect=replay.html');
+                return;
+            }
+            if (demoAuth !== 'true') {
+                window.location.replace('login.html?redirect=replay.html');
+                return;
+            }
+        })();
+
+        // Analytics Accordion Toggle
+        function toggleAnalyticsSection() {
+            const content = document.getElementById('analyticsContent');
+            const chevron = document.getElementById('analyticsChevron');
+            const btn = document.getElementById('analyticsToggleBtn');
+            if (content.style.display === 'none' || !content.style.display) {
+                content.style.display = 'block';
+                chevron.style.transform = 'rotate(180deg)';
+                btn.setAttribute('aria-expanded', 'true');
+            } else {
+                content.style.display = 'none';
+                chevron.style.transform = 'rotate(0deg)';
+                btn.setAttribute('aria-expanded', 'false');
+            }
+        }
+
+        lucide.createIcons();
+    </script>
+</body>
+</html>

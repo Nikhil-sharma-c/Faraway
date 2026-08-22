@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProctorAI | Enterprise Examination Integrity Platform</title>
+    <meta name="description" content="Making examinations more trustworthy, secure, transparent, and fair through AI-powered monitoring and analytics.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="landing.css">
+    <link rel="stylesheet" href="theme.css">
+    <script src="theme.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <canvas id="particles-bg"></canvas>
+    <nav class="navbar glass-panel">
+        <div class="nav-content">
+            <div class="logo">
+                <i data-lucide="shield-check" class="accent-icon"></i>
+                <span>ProctorAI</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features" class="tab-link active">Features</a>
+                <a href="#how-it-works" class="tab-link">How it Works</a>
+                <a href="#showcase" class="tab-link">Platform</a>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <button type="button" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle dark/light mode" title="Toggle theme">
+                    <span data-theme-icon><i data-lucide="sun" style="width:15px;height:15px;"></i></span>
+                </button>
+                <button class="mobile-menu-btn" aria-label="Menu"><i data-lucide="menu"></i></button>
+            </div>
+        </div>
+    </nav>
+    <section class="hero">
+        <div class="hero-bg-glow"></div>
+        <div class="hero-content reveal-up">
+            <div class="badge badge-hero">Introducing ProctorAI Enterprise</div>
+            <h1 class="hero-title">AI Examination<br><span class="gradient-text">Integrity Platform</span></h1>
+            <p class="hero-subtitle">Making examinations more secure, transparent, and trustworthy through AI-powered monitoring and analytics.</p>
+            <div class="hero-buttons">
+                <a href="login.html" class="btn btn-primary" id="startMonitoringBtn">Command Login <i data-lucide="lock"></i></a>
+            </div>
+        </div>
+        <div class="hero-mockup-wrapper reveal-up" style="transition-delay: 0.2s;">
+            <div class="glass-mockup">
+                <div class="mockup-header">
+                    <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                    <span class="mockup-bar-label">LIVE EXAMINATION ENVIRONMENT &mdash; AI MONITORING ACTIVE</span>
+                </div>
+                <div class="mockup-body">
+                    <img src="exam_room.jpg" alt="University examination room with students and supervisor" class="mockup-img" loading="lazy">
+                    <div class="mockup-overlay"></div>
+                    <div class="hud-indicators">
+                        <div class="hud-pill hud-live"><span class="hud-live-dot"></span>LIVE MONITORING</div>
+                        <div class="hud-pill hud-camera"><i data-lucide="camera" style="width:10px;height:10px;"></i>CAMERA ACTIVE</div>
+                        <div class="hud-pill hud-ai"><i data-lucide="cpu" style="width:10px;height:10px;"></i>AI MONITORING</div>
+                        <div class="hud-pill hud-face"><i data-lucide="scan-face" style="width:10px;height:10px;"></i>FACE DETECTION</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section class="statistics" style="padding-bottom: 2rem;">
+        <div class="container">
+            <div class="glass-panel" style="padding: 3rem; text-align: center; border-radius: 20px; max-width: 800px; margin: 0 auto; background: rgba(13, 17, 23, 0.6); backdrop-filter: blur(20px);">
+                <i data-lucide="cpu" class="accent-icon" style="width: 48px; height: 48px; margin-bottom: 1.5rem;"></i>
+                <h2 style="font-size: 2rem; margin-bottom: 1rem; color: var(--text-primary);">Advanced Computer Vision</h2>
+                <p style="font-size: 1.1rem; color: var(--text-secondary); line-height: 1.6;">ProctorAI uses state-of-the-art facial landmark extraction to continuously track student gaze direction, presence, and prohibited objects in real-time. Our dynamic Trust Engine ensures exams are fair by monitoring exact behavioral states without invasive software installations.</p>
+            </div>
+        </div>
+    </section>
+    <section id="features" class="features section-padding">
+        <div class="container">
+            <div class="features-intro reveal-up">
+                <div class="features-intro-left">
+                    <div class="feat-label">CAPABILITIES</div>
+                    <h2 class="section-title feat-title">AI-powered<br>examination security.</h2>
+                    <p class="section-subtitle feat-subtitle">ProctorAI delivers a comprehensive set of computer-vision AI engines purpose-built for real-world examination environments.</p>
+                </div>
+                <div class="features-intro-right">
+                    <div class="feat-highlight-card glass-panel">
+                        <div class="fhc-top">
+                            <div class="fhc-num">01</div>
+                            <div class="fhc-badge">CORE ENGINE</div>
+                        </div>
+                        <div class="fhc-icon-wrap">
+                            <i data-lucide="scan-face" class="fhc-icon"></i>
+                        </div>
+                        <h3 class="fhc-title">Face Verification</h3>
+                        <p class="fhc-desc">Real-time identity verification against registered student biometric profiles using ArcFace neural recognition. Identity is confirmed at session start and continuously monitored throughout the examination.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="capabilities-grid reveal-up" style="transition-delay: 0.15s;">
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">02</span><div class="cap-icon"><i data-lucide="eye"></i></div></div>
+                    <h4 class="cap-title">Eye &amp; Gaze Monitoring</h4>
+                    <p class="cap-desc">Tracks gaze direction and detects unusual eye movement patterns that suggest off-screen attention.</p>
+                </div>
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">03</span><div class="cap-icon"><i data-lucide="smartphone"></i></div></div>
+                    <h4 class="cap-title">Phone Detection</h4>
+                    <p class="cap-desc">Detects mobile phones appearing in the examination environment using YOLO11 real-time object detection.</p>
+                </div>
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">04</span><div class="cap-icon"><i data-lucide="watch"></i></div></div>
+                    <h4 class="cap-title">Smartwatch &amp; Earbud Detection</h4>
+                    <p class="cap-desc">Identifies prohibited wearable devices and audio accessories that violate examination policy.</p>
+                </div>
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">05</span><div class="cap-icon"><i data-lucide="users"></i></div></div>
+                    <h4 class="cap-title">Multi-Person Detection</h4>
+                    <p class="cap-desc">Flags additional individuals entering the examination frame beyond the registered candidate.</p>
+                </div>
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">06</span><div class="cap-icon"><i data-lucide="activity"></i></div></div>
+                    <h4 class="cap-title">Risk &amp; Trust Engine</h4>
+                    <p class="cap-desc">Aggregates all detection signals into real-time risk scores and trust indicators for the session.</p>
+                </div>
+                <div class="cap-module glass-panel">
+                    <div class="cap-module-top"><span class="cap-num">07</span><div class="cap-icon"><i data-lucide="bell"></i></div></div>
+                    <h4 class="cap-title">Live Alert Center</h4>
+                    <p class="cap-desc">Surfaces examination events immediately to the proctor with severity classification and timestamps.</p>
+                </div>
+                <div class="cap-module glass-panel cap-module-wide">
+                    <div class="cap-module-top"><span class="cap-num">08</span><div class="cap-icon"><i data-lucide="bar-chart-2"></i></div></div>
+                    <h4 class="cap-title">Post-Exam Analytics</h4>
+                    <p class="cap-desc">Generates a detailed session integrity summary after examination completion for proctor review and institutional record.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section id="how-it-works" class="how-it-works section-padding">
+        <div class="container">
+            <div class="hiw-header section-header reveal-up">
+                <div class="feat-label hiw-label">SECURITY PIPELINE</div>
+                <h2 class="section-title">How ProctorAI secures an exam.</h2>
+                <p class="section-subtitle">A structured six-stage security pipeline &mdash; from identity registration through post-examination analysis.</p>
+            </div>
+            <div class="hiw-timeline" id="hiwTimeline">
+                <div class="hiw-connector-track" aria-hidden="true">
+                    <div class="hiw-connector-line" id="hiwConnector">
+                        <div class="hiw-glow-head"></div>
+                    </div>
+                </div>
+
+                <!-- Stage 01: Register -->
+                <div class="hiw-step" data-step="0">
+                    <div class="hiw-step-col hiw-col-left hiw-num-desktop">
+                        <div class="hiw-step-num">01</div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="user-plus"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">PRE-EXAMINATION</div>
+                                <span class="hiw-step-num-mobile">01</span>
+                            </div>
+                            <h3>Register</h3>
+                            <p>Student identity is enrolled before the examination. A biometric facial profile is captured and stored for the session.</p>
+                            <div class="hiw-card-status">
+                                <span class="hiw-status-dot"></span> Stage 1 of 6
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stage 02: Verify -->
+                <div class="hiw-step hiw-step-alt" data-step="1">
+                    <div class="hiw-step-col hiw-col-left hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">IDENTITY GATE</div>
+                                <span class="hiw-step-num-mobile">02</span>
+                            </div>
+                            <h3>Verify</h3>
+                            <p>At session start, face identity is checked against the registered biometric profile using ArcFace recognition.</p>
+                            <div class="hiw-card-status">
+                                <span class="hiw-status-dot"></span> Stage 2 of 6
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="shield-check"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-num-desktop">
+                        <div class="hiw-step-num hiw-num-right">02</div>
+                    </div>
+                </div>
+
+                <!-- Stage 03: Monitor -->
+                <div class="hiw-step" data-step="2">
+                    <div class="hiw-step-col hiw-col-left hiw-num-desktop">
+                        <div class="hiw-step-num">03</div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="camera"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">LIVE SESSION</div>
+                                <span class="hiw-step-num-mobile">03</span>
+                            </div>
+                            <h3>Monitor</h3>
+                            <p>Camera continuously monitors the examination environment. Face presence, gaze direction, and device detection run in parallel.</p>
+                            <div class="hiw-card-status">
+                                <span class="hiw-status-dot"></span> Stage 3 of 6
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stage 04: Analyze -->
+                <div class="hiw-step hiw-step-alt" data-step="3">
+                    <div class="hiw-step-col hiw-col-left hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">AI ANALYSIS</div>
+                                <span class="hiw-step-num-mobile">04</span>
+                            </div>
+                            <h3>Analyze</h3>
+                            <p>AI engines analyze face identity, gaze deviations, prohibited objects, and additional person events simultaneously in real-time.</p>
+                            <div class="hiw-card-status">
+                                <span class="hiw-status-dot"></span> Stage 4 of 6
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="cpu"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-num-desktop">
+                        <div class="hiw-step-num hiw-num-right">04</div>
+                    </div>
+                </div>
+
+                <!-- Stage 05: Respond -->
+                <div class="hiw-step" data-step="4">
+                    <div class="hiw-step-col hiw-col-left hiw-num-desktop">
+                        <div class="hiw-step-num">05</div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="alert-triangle"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">ALERT RESPONSE</div>
+                                <span class="hiw-step-num-mobile">05</span>
+                            </div>
+                            <h3>Respond</h3>
+                            <p>Risk signals and alerts are surfaced immediately to the proctor via the Alert Center with severity classification.</p>
+                            <div class="hiw-card-status">
+                                <span class="hiw-status-dot"></span> Stage 5 of 6
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stage 06: Report -->
+                <div class="hiw-step hiw-step-alt" data-step="5">
+                    <div class="hiw-step-col hiw-col-left hiw-card-col">
+                        <div class="hiw-step-card glass-panel">
+                            <div class="hiw-card-header">
+                                <div class="hiw-card-tag">POST-EXAMINATION</div>
+                                <span class="hiw-step-num-mobile">06</span>
+                            </div>
+                            <h3>Report</h3>
+                            <p>After the exam ends, session results, trust scores, risk events, and detection history are compiled into a full integrity report.</p>
+                            <div class="hiw-card-status hiw-status-final">
+                                <span class="hiw-status-dot"></span> Stage 6 of 6 &bull; Verified
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-node-col">
+                        <div class="hiw-node-ring hiw-node-final">
+                            <div class="hiw-node-halo"></div>
+                            <div class="hiw-node-icon"><i data-lucide="file-text"></i></div>
+                        </div>
+                    </div>
+                    <div class="hiw-step-col hiw-col-right hiw-num-desktop">
+                        <div class="hiw-step-num hiw-num-right">06</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section id="showcase" class="showcase section-padding">
+        <div class="container">
+            <div class="section-header reveal-up">
+                <h2 class="section-title">A unified suite.</h2>
+                <p class="section-subtitle">Explore the components of the ProctorAI ecosystem.</p>
+            </div>
+            <div class="showcase-grid">
+                <a href="monitoring.html" class="showcase-card glass-panel reveal-up">
+                    <div class="showcase-img-wrapper"><div class="placeholder-gradient bg-1"></div><div class="showcase-overlay"><i data-lucide="external-link"></i></div></div>
+                    <div class="showcase-content"><h3>Live Monitoring Dashboard</h3><p>Real-time feeds, risk updates, and alert center.</p></div>
+                </a>
+                <a href="reports.html" class="showcase-card glass-panel reveal-up" style="transition-delay: 0.1s;">
+                    <div class="showcase-img-wrapper"><div class="placeholder-gradient bg-2"></div><div class="showcase-overlay"><i data-lucide="external-link"></i></div></div>
+                    <div class="showcase-content"><h3>Reports &amp; Analytics</h3><p>Institutional KPIs, AI insights, and violation data.</p></div>
+                </a>
+                <a href="enrollment.html" class="showcase-card glass-panel reveal-up" style="transition-delay: 0.2s;">
+                    <div class="showcase-img-wrapper"><div class="placeholder-gradient bg-3"></div><div class="showcase-overlay"><i data-lucide="external-link"></i></div></div>
+                    <div class="showcase-content"><h3>Identity Enrollment</h3><p>Secure student verification and facial data registration.</p></div>
+                </a>
+            </div>
+        </div>
+    </section>
+    <section class="why-it-matters section-padding">
+        <div class="container">
+            <div class="matters-grid">
+                <div class="matters-text reveal-up">
+                    <h2 class="section-title">Why Integrity Matters.</h2>
+                    <p class="section-subtitle">Traditional exams are vulnerable. We solve the hard problems.</p>
+                    <ul class="matters-list">
+                        <li><i data-lucide="check-circle" class="accent-icon"></i> Eliminates exam malpractice efficiently</li>
+                        <li><i data-lucide="check-circle" class="accent-icon"></i> Flags suspicious activities instantly</li>
+                        <li><i data-lucide="check-circle" class="accent-icon"></i> Restores institutional transparency</li>
+                        <li><i data-lucide="check-circle" class="accent-icon"></i> Simplifies difficult academic investigations</li>
+                    </ul>
+                </div>
+                <div class="matters-visual reveal-up">
+                    <div class="glass-panel floating-card card-1"><div class="card-header"><i data-lucide="shield"></i> Security First</div><div class="card-body">Enterprise-grade encryption and strict privacy protocols.</div></div>
+                    <div class="glass-panel floating-card card-2"><div class="card-header"><i data-lucide="zap"></i> Blazing Speed</div><div class="card-body">Sub-second anomaly detection scaling globally.</div></div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section class="cta section-padding">
+        <div class="container">
+            <div class="cta-box glass-panel reveal-up">
+                <div class="cta-glow"></div>
+                <h2>Build Trust in Every Examination.</h2>
+                <p>Join the institutions securing their academic future with AI.</p>
+                <div class="cta-buttons">
+                    <a href="monitoring.html" class="btn btn-primary" id="launchPlatformBtn">Launch Platform</a>
+                    <a href="#features" class="btn btn-outline">Explore Features</a>
+                </div>
+            </div>
+        </div>
+    </section>
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <div class="logo"><i data-lucide="shield-check" class="accent-icon"></i><span>ProctorAI</span></div>
+                    <p class="footer-desc">Making examinations more secure, transparent, and trustworthy through AI.</p>
+                </div>
+                <div class="footer-links-group"><h4>Platform</h4><a href="monitoring.html">Live Monitoring</a><a href="enrollment.html">Identity Enrollment</a></div>
+                <div class="footer-links-group"><h4>Company</h4><a href="#">About Us</a><a href="#">Careers</a><a href="#">Contact Support</a></div>
+                <div class="footer-links-group"><h4>Legal</h4><a href="#">Privacy Policy</a><a href="#">Terms of Service</a><a href="#">Security Overview</a></div>
+            </div>
+            <div class="footer-bottom"><p>&copy; 2026 ProctorAI Enterprise. All rights reserved.</p></div>
+        </div>
+    </footer>
+    <script src="landing.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

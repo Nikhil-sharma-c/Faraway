@@ -1,0 +1,42 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start ProctorAI Frontend",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"dev"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/frontend"
+			},
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Start ProctorAI Backend",
+			"type": "shell",
+			"command": "C:/Users/Nikhil Sharma/AppData/Local/Programs/Python/Python313/python.exe",
+			"args": [
+				"server.py"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/backend"
+			},
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Start ProctorAI",
+			"dependsOn": [
+				"Start ProctorAI Backend",
+				"Start ProctorAI Frontend"
+			],
+			"dependsOrder": "parallel"
+		}
+	]
+}
