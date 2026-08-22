@@ -1547,7 +1547,7 @@ p.subtitle {
     <!-- ══ MASTER MONITORING LAYOUT WRAPPER ═════════════════════════ -->
     <div class="master-layout-wrap">
 
-        <!-- ══ 1. TWO-COLUMN TOP GRID: SESSION INFO (LEFT) & LIVE CAMERA (RIGHT) ══ -->
+        <!-- ══ 1. TWO-COLUMN TOP GRID: SESSION INFO (LEFT) & LIVE CAMERA + ACTIONS + ROSTER (RIGHT) ══ -->
         <div class="monitoring-top-grid">
 
             <!-- ═ LEFT COLUMN: SESSION & PRE-SESSION READINESS INFORMATION ═ -->
@@ -1656,25 +1656,9 @@ p.subtitle {
                         <div class="ready-sub">Zero cross-tenant exposure</div>
                     </div>
                 </div>
-
-                <!-- Enrolled Candidates Roster Section -->
-                <div class="roster-header">
-                    <div class="roster-title">
-                        <i data-lucide="user-check" style="width:14px;height:14px;color:var(--success);"></i>
-                        Enrolled Candidates Roster
-                    </div>
-                    <input type="text" class="roster-search" id="rosterSearch" placeholder="Search candidate..." oninput="filterRoster(this.value)">
-                </div>
-
-                <div class="roster-scroll" id="rosterList">
-                    <div class="roster-empty" id="rosterEmpty">
-                        <i data-lucide="loader" class="lucide-spin" style="width:20px;height:20px;margin-bottom:0.5rem;display:inline-block;"></i>
-                        <div>Loading enrolled candidates...</div>
-                    </div>
-                </div>
             </aside>
 
-            <!-- ═ RIGHT COLUMN: PROMINENT LIVE EXAMINATION CAMERA & START BUTTON ═ -->
+            <!-- ═ RIGHT COLUMN: PROMINENT LIVE EXAMINATION CAMERA, ACTIONS & ROSTER ═ -->
             <section class="panel-container cam-monitor-panel">
                 <div class="panel-header-row">
                     <div class="panel-header-info">
@@ -1715,6 +1699,24 @@ p.subtitle {
                     <button class="btn btn-register-face" id="captureBtn">
                         <i data-lucide="camera"></i> Register Biometric Face ID
                     </button>
+
+                    <!-- ENROLLED CANDIDATES ROSTER SECTION DIRECTLY BELOW REGISTER BIOMETRIC FACE ID -->
+                    <div class="roster-section-wrap" style="margin-top:0.75rem;">
+                        <div class="roster-header">
+                            <div class="roster-title">
+                                <i data-lucide="user-check" style="width:14px;height:14px;color:var(--success);"></i>
+                                Enrolled Candidates Roster
+                            </div>
+                            <input type="text" class="roster-search" id="rosterSearch" placeholder="Search candidate..." oninput="filterRoster(this.value)">
+                        </div>
+
+                        <div class="roster-scroll" id="rosterList">
+                            <div class="roster-empty" id="rosterEmpty">
+                                <i data-lucide="loader" class="lucide-spin" style="width:20px;height:20px;margin-bottom:0.5rem;display:inline-block;"></i>
+                                <div>Loading enrolled candidates...</div>
+                            </div>
+                        </div>
+                    </div>
                     
                     <div id="statusMsg" class="message"></div>
                 </div>
