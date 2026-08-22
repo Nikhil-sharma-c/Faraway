@@ -366,23 +366,30 @@ body::before {
 }
 
 .theme-toggle-btn {
-    width: 34px;
-    height: 34px;
-    border-radius: var(--radius-md);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
     background: var(--card-bg);
     border: 1px solid var(--border-light);
     color: var(--t2);
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all var(--transition-fast);
+    padding: 0;
+    margin: 0;
+    outline: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
 }
 
 .theme-toggle-btn:hover {
     background: var(--accent-dim);
     border-color: var(--cyan);
     color: var(--t1);
+    box-shadow: 0 0 14px rgba(0, 229, 255, 0.35);
+    transform: scale(1.08);
 }
 
 .btn-primary {
