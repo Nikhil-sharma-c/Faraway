@@ -22,29 +22,35 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Cap torch's CPU thread pool. Ultralytics/torch defaults to ~one thread per core;
-# combined with the phone model's ONNX Runtime pool and the ArcFace pool, that
-# oversubscribed the CPU and made a "50ms" inference take multiple SECONDS under
-# contention -- the detection freeze / "no signal". Small fixed pools per model
-# keep their combined threads within the core budget.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), os.pardir, ".env"))
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
+from database.adapter import get_connection as get_db_connection, init_db as init_database
+
+# Cap torch's CPU thread pool.
 try:
     import torch as _torch
     _torch.set_num_threads(int(os.environ.get("TORCH_THREADS", "4")))
 except Exception as _e:
-    print(f"[PERF] could not cap torch threads: {_e}")
-# OpenCV (optical-flow tracker, SFace embedder, resize/JPEG in the stream worker)
-# also defaults to one thread per core. Left uncapped it stacks on top of torch +
-# ONNX Runtime + MediaPipe and re-creates the oversubscription that starved the
-# face loop. Cap it too so the per-model pools stay within the core budget.
+    pass
+
+# OpenCV thread cap
 try:
     cv2.setNumThreads(int(os.environ.get("CV2_THREADS", "4")))
 except Exception as _e:
-    print(f"[PERF] could not cap cv2 threads: {_e}")
+    pass
 
 # ---------------- CONFIG ----------------
 # Prefer the environment variable; the hardcoded fallback should be rotated
 # and removed before any public deployment.
 DB_URL = os.environ.get("DATABASE_URL", "")
+
+def connect_db():
+    return get_db_connection(DB_URL)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 BASE_DIR = PROJECT_ROOT
@@ -178,7 +184,7 @@ def verify_totp_code(secret_base32, code, window=1):
 def record_audit_event(user_id, username, role, institution_id, action, ip_address, result, details=""):
     """Persists immutable security audit events into PostgreSQL."""
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO audit_logs (user_id, username, role, institution_id, action, ip_address, result, details)
@@ -264,7 +270,7 @@ def require_auth():
 
     # Verify Account Active Status in DB (Invalidate session immediately if disabled)
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT status, role, institution_id FROM users WHERE user_id = %s;", (user_id,))
         urow = cursor.fetchone()
@@ -289,11 +295,11 @@ def require_auth():
         return
 
     if path in ['/monitoring.html', '/enrollment.html', '/replay.html', '/reports.html'] or path.startswith('/api/session/') or path == '/api/register':
-        if role not in ['ADMIN', 'SUPERVISOR', 'TEACHER']:
+        if role not in ['ADMIN', 'SUPERVISOR', 'TEACHER', 'FACULTY']:
             record_audit_event(user_id, session.get('username'), role, session.get('institution_id'), 'ACCESS_DENIED', request.remote_addr, 'DENIED', f"Unauthorized access attempt to {path}")
             if path.startswith('/api/'):
-                return jsonify({"error": "FORBIDDEN: Supervisor clearance required"}), 403
-            return redirect('/supervisor_login.html')
+                return jsonify({"error": "FORBIDDEN: Supervisor/Faculty clearance required"}), 403
+            return redirect('/login.html')
         return
 
     if path == '/student_dashboard.html' or path.startswith('/api/student/'):
@@ -325,7 +331,7 @@ def serve_report(filename):
 
     if role != 'ADMIN':
         try:
-            conn = psycopg2.connect(DB_URL)
+            conn = connect_db()
             cursor = conn.cursor()
             cursor.execute("SELECT institution_id FROM exam_sessions WHERE report_url LIKE %s LIMIT 1;", (f"%{filename}%",))
             row = cursor.fetchone()
@@ -398,8 +404,9 @@ print(f"[FACE] ArcFace on {embedder.provider}")
 # the face pipeline (that oversubscription was the root cause of the detection
 # freeze / "no signal" regression -- measured 54x slowdown uncapped, 8x capped).
 PHONE_ENABLED = os.environ.get("PHONE_DETECTION", "on").lower() != "off"
-phone_detector = (phone_detect.PhoneDetector(
-    os.environ.get("PHONE_MODEL", os.path.join(MODEL_DIR, "yolo26s.onnx"))) if PHONE_ENABLED else None)
+_phone_model_env = os.environ.get("PHONE_MODEL")
+_phone_model_path = _phone_model_env if (_phone_model_env and os.path.isabs(_phone_model_env)) else (os.path.join(PROJECT_ROOT, _phone_model_env) if _phone_model_env else os.path.join(MODEL_DIR, "yolov8n.pt"))
+phone_detector = (phone_detect.PhoneDetector(_phone_model_path) if PHONE_ENABLED else None)
 
 # Track ID to Student ID mapping (retained for the absent-student cleanup
 # pass below; population via a person tracker was removed -- see _ai_worker_loop)
@@ -701,7 +708,7 @@ def record_timeline_event(student_id, student_name, institution_id, category, ev
             timeline_events_buffer.pop()
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO action_timeline (
@@ -737,229 +744,7 @@ def record_timeline_event(student_id, student_name, institution_id, category, ev
 active_monitoring_institution = "INST-001"
 
 def init_db():
-    try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-
-        # 1. Institutions table with complete configuration fields
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS institutions (
-                institution_id TEXT PRIMARY KEY,
-                institution_name VARCHAR(150) NOT NULL,
-                institution_type VARCHAR(50) DEFAULT 'University',
-                country VARCHAR(100) DEFAULT 'United States',
-                state VARCHAR(100) DEFAULT '',
-                city VARCHAR(100) DEFAULT '',
-                email VARCHAR(150) DEFAULT '',
-                contact VARCHAR(50) DEFAULT '',
-                institution_code VARCHAR(50) UNIQUE NOT NULL,
-                status VARCHAR(20) DEFAULT 'ACTIVE',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='institution_type') THEN
-                    ALTER TABLE institutions ADD COLUMN institution_type VARCHAR(50) DEFAULT 'University';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='country') THEN
-                    ALTER TABLE institutions ADD COLUMN country VARCHAR(100) DEFAULT 'United States';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='state') THEN
-                    ALTER TABLE institutions ADD COLUMN state VARCHAR(100) DEFAULT '';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='city') THEN
-                    ALTER TABLE institutions ADD COLUMN city VARCHAR(100) DEFAULT '';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='email') THEN
-                    ALTER TABLE institutions ADD COLUMN email VARCHAR(150) DEFAULT '';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='institutions' AND column_name='contact') THEN
-                    ALTER TABLE institutions ADD COLUMN contact VARCHAR(50) DEFAULT '';
-                END IF;
-            END $$;
-        """)
-
-        # 2. Users table (ADMIN, FACULTY / SUPERVISOR / TEACHER)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                username VARCHAR(100) UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role VARCHAR(20) NOT NULL,
-                institution_id TEXT,
-                student_id VARCHAR(50),
-                status VARCHAR(20) DEFAULT 'ACTIVE',
-                mfa_secret VARCHAR(64) DEFAULT 'JBSWY3DPEHPK3PXP',
-                mfa_enabled BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_secret') THEN
-                    ALTER TABLE users ADD COLUMN mfa_secret VARCHAR(64) DEFAULT 'JBSWY3DPEHPK3PXP';
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='mfa_enabled') THEN
-                    ALTER TABLE users ADD COLUMN mfa_enabled BOOLEAN DEFAULT TRUE;
-                END IF;
-            END $$;
-        """)
-
-        # 3. Students table with institution_id and ArcFace multi-templates
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS students (
-                id SERIAL PRIMARY KEY,
-                student_id VARCHAR(50) UNIQUE,
-                name VARCHAR(100),
-                face_encoding JSONB,
-                arcface_templates JSONB,
-                institution_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='students' AND column_name='arcface_templates') THEN
-                    ALTER TABLE students ADD COLUMN arcface_templates JSONB;
-                END IF;
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='students' AND column_name='institution_id') THEN
-                    ALTER TABLE students ADD COLUMN institution_id TEXT;
-                END IF;
-            END $$;
-        """)
-
-        # 4. Exam logs table with institution_id
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS exam_logs (
-                id SERIAL PRIMARY KEY,
-                student_id VARCHAR(50),
-                institution_id TEXT,
-                risk_score INT,
-                direction VARCHAR(50),
-                status VARCHAR(50),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='exam_logs' AND column_name='institution_id') THEN
-                    ALTER TABLE exam_logs ADD COLUMN institution_id TEXT;
-                END IF;
-            END $$;
-        """)
-
-        # 5. Exam sessions
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS exam_sessions (
-                session_id SERIAL PRIMARY KEY,
-                institution_id TEXT,
-                supervisor_id INT,
-                status VARCHAR(20),
-                start_time TIMESTAMP,
-                end_time TIMESTAMP,
-                duration_seconds INT,
-                report_url TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        # 6. Immutable Security Audit Logs table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS audit_logs (
-                log_id SERIAL PRIMARY KEY,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_id INT,
-                username VARCHAR(100),
-                role VARCHAR(20),
-                institution_id TEXT,
-                action VARCHAR(50) NOT NULL,
-                ip_address VARCHAR(50),
-                result VARCHAR(20) NOT NULL,
-                details TEXT
-            );
-        """)
-
-        # 7. Reviewable Action Timeline table (Search & Discovery)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS action_timeline (
-                id SERIAL PRIMARY KEY,
-                event_uuid VARCHAR(64) UNIQUE,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                time_str VARCHAR(20),
-                student_id VARCHAR(50),
-                student_name VARCHAR(100),
-                institution_id TEXT,
-                category VARCHAR(50),
-                event_type VARCHAR(50),
-                title VARCHAR(150),
-                description TEXT,
-                severity VARCHAR(30),
-                state_change JSONB,
-                metadata JSONB,
-                resolved BOOLEAN DEFAULT FALSE
-            );
-        """)
-
-        # Seed default institution if table empty
-        cursor.execute("SELECT COUNT(*) FROM institutions;")
-        _row = cursor.fetchone()
-        if _row is not None and _row[0] == 0:
-            cursor.execute("""
-                INSERT INTO institutions (institution_id, institution_name, institution_type, country, state, city, email, contact, institution_code, status)
-                VALUES ('INST-001', 'Apex Institute of Technology', 'University', 'United States', 'California', 'San Francisco', 'admin@apex.edu', '+1 (555) 019-2834', 'AIT-001', 'ACTIVE');
-            """)
-
-        # Seed single platform Admin if not exists
-        cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'ADMIN';")
-        _row = cursor.fetchone()
-        if _row is not None and _row[0] == 0:
-            admin_hash = generate_password_hash("Admin@ProctorAI2026")
-            cursor.execute("""
-                INSERT INTO users (name, username, password_hash, role, institution_id, status, mfa_secret, mfa_enabled)
-                VALUES ('Platform Administrator', 'admin', %s, 'ADMIN', NULL, 'ACTIVE', 'JBSWY3DPEHPK3PXP', FALSE);
-            """, (admin_hash,))
-
-        # Seed default Faculty user for INST-001 if not exists
-        cursor.execute("SELECT COUNT(*) FROM users WHERE role IN ('FACULTY', 'SUPERVISOR');")
-        _row = cursor.fetchone()
-        if _row is not None and _row[0] == 0:
-            faculty_hash = generate_password_hash("Faculty@123")
-            cursor.execute("""
-                INSERT INTO users (name, username, password_hash, role, institution_id, status, mfa_secret, mfa_enabled)
-                VALUES ('Dr. Sarah Jenkins', 'faculty@apex.edu', %s, 'FACULTY', 'INST-001', 'ACTIVE', 'JBSWY3DPEHPK3PXP', FALSE);
-            """, (faculty_hash,))
-
-        # Seed realistic action timeline events if table empty
-        cursor.execute("SELECT COUNT(*) FROM action_timeline;")
-        _trow = cursor.fetchone()
-        if _trow is not None and _trow[0] == 0:
-            for ev in DEFAULT_TIMELINE_SEED:
-                cursor.execute("""
-                    INSERT INTO action_timeline (
-                        event_uuid, time_str, student_id, student_name, institution_id,
-                        category, event_type, title, description, severity, state_change,
-                        metadata, resolved, timestamp
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (event_uuid) DO NOTHING;
-                """, (
-                    ev["id"], ev["timestamp"], ev["student_id"], ev["student_name"],
-                    ev["institution_id"], ev["category"], ev["event_type"], ev["title"],
-                    ev["description"], ev["severity"], json.dumps(ev["state_change"]),
-                    json.dumps(ev["metadata"]), ev["resolved"], ev["iso_timestamp"]
-                ))
-
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print("[DB] Multi-institution database schema verified (Tenants & RBAC ready).")
-    except Exception as e:
-        print(f"Error initializing DB: {e}")
+    return init_database(DB_URL)
 
 def init_sqlite():
     """Initializes local persistent SQLite database used for offline / standalone operation."""
@@ -1075,7 +860,7 @@ def load_students():
     rows = []
     # 1. Try PostgreSQL if available
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
         rows = cursor.fetchall()
@@ -1155,7 +940,7 @@ load_students()
 def get_public_institutions():
     """Returns active institutions for login selection dropdowns."""
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT institution_id, institution_name, institution_type, city, country, institution_code
@@ -1178,7 +963,15 @@ def get_public_institutions():
             })
         return jsonify(insts)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"[INSTITUTIONS] Notice: Database offline/unreachable ({e}), returning default institution.")
+        return jsonify([{
+            "institution_id": "INST-001",
+            "institution_name": "Apex Institute of Technology",
+            "institution_type": "University",
+            "city": "San Francisco",
+            "country": "United States",
+            "institution_code": "AIT-001"
+        }])
 
 @app.route('/api/institutions/setup', methods=['POST'])
 def setup_institution_endpoint():
@@ -1203,7 +996,7 @@ def setup_institution_endpoint():
     inst_id = f"INST-{code[:6]}-{secrets.token_hex(2).upper()}"
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO institutions (institution_id, institution_name, institution_type, country, state, city, email, contact, institution_code, status)
@@ -1459,7 +1252,7 @@ def auth_login():
     password = data.get('password', '').strip()
 
     if not username or not password:
-        return jsonify({"error": "INVALID CREDENTIALS"}), 400
+        return jsonify({"error": "Invalid email/username or password"}), 400
 
     requested_role = (data.get('role') or 'FACULTY').strip().upper()
     req_inst_id = data.get('institution_id')
@@ -1469,32 +1262,14 @@ def auth_login():
         record_audit_event(None, username, "STUDENT", req_inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Student login attempt blocked: Students do not have login accounts")
         return jsonify({"error": "ACCESS DENIED: Students do not have platform login accounts. Monitoring is conducted by authorized faculty."}), 403
 
-    if username.lower() == 'admin' and (password == 'Admin@ProctorAI2026' or password == 'admin'):
-        session['user_id'] = 1
-        session['name'] = 'Platform Administrator'
-        session['username'] = 'admin'
-        session['role'] = 'ADMIN'
-        session['institution_id'] = None
-        session['institution_name'] = 'Platform Command'
-        session['last_activity'] = time.time()
-        reset_failed_attempts(rate_key)
-        record_audit_event(1, 'admin', 'ADMIN', 'PLATFORM', 'LOGIN_SUCCESS', ip, 'SUCCESS', 'Admin authenticated')
-        return jsonify({
-            "success": True,
-            "role": "ADMIN",
-            "redirect": "/admin.html",
-            "user": {
-                "name": "Platform Administrator",
-                "username": "admin",
-                "role": "ADMIN",
-                "institution_id": None,
-                "institution_name": "Platform Command"
-            }
-        })
-
-    row = None
+    # Database connection & lookup
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
+    except Exception as db_err:
+        print(f"[AUTH] Database connection failed: {db_err}")
+        return jsonify({"error": "Database connection unavailable"}), 503
+
+    try:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT u.user_id, u.name, u.username, u.password_hash, u.role, u.institution_id, u.student_id, u.status, u.mfa_secret, u.mfa_enabled, i.institution_name, i.status AS inst_status
@@ -1505,158 +1280,111 @@ def auth_login():
         row = cursor.fetchone()
         cursor.close()
         conn.close()
+    except Exception as query_err:
+        print(f"[AUTH] Database query error: {query_err}")
+        return jsonify({"error": "Database connection unavailable"}), 503
+
+    if not row:
+        record_failed_attempt(rate_key)
+        record_audit_event(None, username, "UNKNOWN", None, "LOGIN_FAILED", ip, "FAILED", "User does not exist")
+        return jsonify({"error": "Invalid email/username or password"}), 401
+
+    user_id, name, uname, pwd_hash, role, inst_id, stu_id, user_status, mfa_secret, mfa_enabled, inst_name, inst_status = row
+
+    # Role clearance check
+    if requested_role == 'ADMIN' and role != 'ADMIN':
+        record_failed_attempt(rate_key)
+        record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Non-admin user attempted admin login")
+        return jsonify({"error": "ACCESS DENIED: Administrator clearance required."}), 403
+
+    if requested_role in ['FACULTY', 'SUPERVISOR', 'TEACHER'] and role not in ['FACULTY', 'SUPERVISOR', 'TEACHER', 'ADMIN']:
+        record_failed_attempt(rate_key)
+        record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Unauthorized role for faculty portal")
+        return jsonify({"error": "ACCESS DENIED: Faculty / Supervisor clearance required."}), 403
+
+    # Institution clearance check for faculty
+    if requested_role in ['FACULTY', 'SUPERVISOR', 'TEACHER'] and req_inst_id and inst_id and inst_id != req_inst_id:
+        record_failed_attempt(rate_key)
+        record_audit_event(user_id, uname, role, req_inst_id, "LOGIN_BLOCKED", ip, "DENIED", f"Faculty account {uname} ({inst_id}) attempted login to {req_inst_id}")
+        return jsonify({"error": "Unauthorized institution clearance for this faculty account."}), 403
+
+    # Secure password verification
+    password_valid = False
+    try:
+        password_valid = check_password_hash(pwd_hash, password)
     except Exception as e:
-        print(f"Error fetching user from DB: {e}")
-        row = None
-
-        if not row:
-            if requested_role in ['FACULTY', 'SUPERVISOR', 'TEACHER'] and len(password) >= 3:
-                target_inst = req_inst_id or 'INST-001'
-                faculty_name = username.split('@')[0].replace('.', ' ').title()
-                pwd_hash = generate_password_hash(password)
-                new_uid = 100
-                inst_title = "Institutional SOC"
-                try:
-                    conn = psycopg2.connect(DB_URL)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO users (name, username, password_hash, role, institution_id, status)
-                        VALUES (%s, %s, %s, 'SUPERVISOR', %s, 'ACTIVE')
-                        ON CONFLICT (username) DO NOTHING
-                        RETURNING user_id;
-                    """, (faculty_name, username, pwd_hash, target_inst))
-                    res = cursor.fetchone()
-                    new_uid = res[0] if res else 100
-                    cursor.execute("SELECT institution_name FROM institutions WHERE institution_id = %s;", (target_inst,))
-                    i_res = cursor.fetchone()
-                    inst_title = i_res[0] if i_res else "Institutional SOC"
-                    conn.commit()
-                    cursor.close()
-                    conn.close()
-                except Exception as e:
-                    print(f"Error auto-provisioning faculty in DB: {e}")
-                    # Local fallback when DB is down
-                    pass
-
-                session['user_id'] = new_uid
-                session['name'] = faculty_name
-                session['username'] = username
-                session['role'] = 'SUPERVISOR'
-                session['institution_id'] = target_inst
-                session['institution_name'] = inst_title
-                session['last_activity'] = time.time()
-                active_monitoring_institution = target_inst
-
-                reset_failed_attempts(rate_key)
-                # record_audit_event might fail without DB, but let's assume it catches its own exceptions
-                record_audit_event(new_uid, username, 'FACULTY', target_inst, 'LOGIN_SUCCESS', ip, 'SUCCESS', f"Faculty {username} authenticated for {inst_title}")
-
-                return jsonify({
-                    "success": True,
-                    "role": "FACULTY",
-                    "redirect": "/enrollment.html",
-                    "user": {
-                        "user_id": new_uid,
-                        "name": faculty_name,
-                        "username": username,
-                        "role": "FACULTY",
-                        "institution_id": target_inst,
-                        "institution_name": inst_title
-                    }
-                })
-
-            record_failed_attempt(rate_key)
-            record_audit_event(None, username, "UNKNOWN", None, "LOGIN_FAILED", ip, "FAILED", "Invalid credentials entered")
-            return jsonify({"error": "INVALID CREDENTIALS"}), 401
-
-        user_id, name, uname, pwd_hash, role, inst_id, stu_id, user_status, mfa_secret, mfa_enabled, inst_name, inst_status = row
-
-        # Only Admin and Teachers/Supervisors/Faculty can log in
-        if role not in ['ADMIN', 'SUPERVISOR', 'TEACHER', 'FACULTY']:
-            record_failed_attempt(rate_key)
-            record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Student login attempt blocked: Students do not have login accounts")
-            return jsonify({"error": "ACCESS DENIED: Students do not have platform login accounts. Monitoring is conducted by institutional proctors."}), 403
-
-        # Password check (Zero mock bypasses)
+        print(f"[AUTH] Password verification exception: {e}")
         password_valid = False
-        try:
-            password_valid = check_password_hash(pwd_hash, password) or password == 'Admin@ProctorAI2026' or password == 'admin' or password == 'Faculty@123'
-        except Exception:
-            password_valid = False
 
-        if not password_valid:
-            record_failed_attempt(rate_key)
-            record_audit_event(user_id, uname, role, inst_id, "LOGIN_FAILED", ip, "FAILED", "Incorrect password")
-            return jsonify({"error": "INVALID CREDENTIALS"}), 401
+    if not password_valid:
+        record_failed_attempt(rate_key)
+        record_audit_event(user_id, uname, role, inst_id, "LOGIN_FAILED", ip, "FAILED", "Incorrect password")
+        return jsonify({"error": "Invalid email/username or password"}), 401
 
-        # Check account status
-        if user_status == 'DISABLED':
-            record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Disabled account attempted login")
-            return jsonify({"error": "ACCESS DENIED: Account is disabled. Contact administrator."}), 403
+    # Check account status
+    if user_status == 'DISABLED':
+        record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Disabled account attempted login")
+        return jsonify({"error": "ACCESS DENIED: Account is disabled. Contact administrator."}), 403
 
-        # Check institution status (for non-admin users)
-        if role != 'ADMIN' and inst_id and inst_status == 'DISABLED':
-            record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Suspended institution attempted login")
-            return jsonify({"error": "ACCESS DENIED: Institution account is suspended."}), 403
+    # Check institution status (for non-admin users)
+    if role != 'ADMIN' and inst_id and inst_status == 'DISABLED':
+        record_audit_event(user_id, uname, role, inst_id, "LOGIN_BLOCKED", ip, "DENIED", "Suspended institution attempted login")
+        return jsonify({"error": "ACCESS DENIED: Institution account is suspended."}), 403
 
-        # Reset failed attempts
-        reset_failed_attempts(rate_key)
+    # Reset failed attempts
+    reset_failed_attempts(rate_key)
 
-        # Multi-Factor Authentication Check for Platform Admin
-        if role == 'ADMIN' and mfa_enabled:
-            totp_code = data.get('code') or data.get('totp')
-            if totp_code:
-                if not verify_totp_code(mfa_secret or ADMIN_DEFAULT_MFA_SECRET, str(totp_code).strip()):
-                    record_failed_attempt(rate_key)
-                    record_audit_event(user_id, uname, 'ADMIN', 'PLATFORM', "MFA_FAILED", ip, "FAILED", "Invalid 6-digit MFA token entered")
-                    return jsonify({"error": "INVALID MFA CODE"}), 401
-            elif data.get('require_mfa', False):
-                session['mfa_pending'] = True
-                session['mfa_user_id'] = user_id
-                session['mfa_username'] = uname
-                session['mfa_name'] = name
-                session['mfa_secret'] = mfa_secret or ADMIN_DEFAULT_MFA_SECRET
-                record_audit_event(user_id, uname, role, 'PLATFORM', "MFA_CHALLENGE_ISSUED", ip, "PENDING", "Admin MFA 2FA verification challenge issued")
-                return jsonify({
-                    "success": True,
-                    "mfa_required": True,
-                    "message": "Two-factor authentication code required",
-                    "temp_user": uname
-                })
+    # Multi-Factor Authentication Check for Platform Admin
+    if role == 'ADMIN' and mfa_enabled:
+        totp_code = data.get('code') or data.get('totp')
+        if totp_code:
+            if not verify_totp_code(mfa_secret or ADMIN_DEFAULT_MFA_SECRET, str(totp_code).strip()):
+                record_failed_attempt(rate_key)
+                record_audit_event(user_id, uname, 'ADMIN', 'PLATFORM', "MFA_FAILED", ip, "FAILED", "Invalid 6-digit MFA token entered")
+                return jsonify({"error": "INVALID MFA CODE"}), 401
+        elif data.get('require_mfa', False):
+            session['mfa_pending'] = True
+            session['mfa_user_id'] = user_id
+            session['mfa_username'] = uname
+            session['mfa_name'] = name
+            session['mfa_secret'] = mfa_secret or ADMIN_DEFAULT_MFA_SECRET
+            record_audit_event(user_id, uname, role, 'PLATFORM', "MFA_CHALLENGE_ISSUED", ip, "PENDING", "Admin MFA 2FA verification challenge issued")
+            return jsonify({
+                "success": True,
+                "mfa_required": True,
+                "message": "Two-factor authentication code required",
+                "temp_user": uname
+            })
 
-        # Set Authenticated Session
-        session['user_id'] = user_id
-        session['name'] = name
-        session['username'] = uname
-        session['role'] = role
-        session['institution_id'] = inst_id
-        session['institution_name'] = inst_name or ("Platform Command" if role == 'ADMIN' else "Institutional SOC")
-        session['last_activity'] = time.time()
-        if inst_id:
-            active_monitoring_institution = inst_id
+    # Set Authenticated Session
+    session['user_id'] = user_id
+    session['name'] = name
+    session['username'] = uname
+    session['role'] = role
+    session['institution_id'] = inst_id
+    session['institution_name'] = inst_name or ("Platform Command" if role == 'ADMIN' else "Institutional SOC")
+    session['last_activity'] = time.time()
+    if inst_id:
+        active_monitoring_institution = inst_id
 
-        record_audit_event(user_id, uname, role, inst_id, "LOGIN_SUCCESS", ip, "SUCCESS", f"Authenticated as {role} for {session['institution_name']}")
+    record_audit_event(user_id, uname, role, inst_id, "LOGIN_SUCCESS", ip, "SUCCESS", f"Authenticated as {role} for {session['institution_name']}")
 
-        # Navigation destinations: Admin -> /admin.html | Faculty -> /enrollment.html
-        redirect_url = '/admin.html' if role == 'ADMIN' else '/enrollment.html'
+    # Navigation destinations: Admin -> /admin.html | Faculty -> /enrollment.html
+    redirect_url = '/admin.html' if role == 'ADMIN' else '/enrollment.html'
 
-        return jsonify({
-            "success": True,
+    return jsonify({
+        "success": True,
+        "role": role,
+        "redirect": redirect_url,
+        "user": {
+            "user_id": user_id,
+            "name": name,
+            "username": uname,
             "role": role,
-            "redirect": redirect_url,
-            "user": {
-                "user_id": user_id,
-                "name": name,
-                "username": uname,
-                "role": role,
-                "institution_id": inst_id,
-                "institution_name": session['institution_name']
-            }
-        })
-
-    except Exception as e:
-        print(f"Error during login: {e}")
-        return jsonify({"error": "SERVER ERROR: Authentication failed"}), 500
+            "institution_id": inst_id,
+            "institution_name": session['institution_name']
+        }
+    })
 
 @app.route('/api/auth/mfa-verify', methods=['POST'])
 def auth_mfa_verify():
@@ -1723,7 +1451,7 @@ def admin_mfa_status():
         return jsonify({"error": "Forbidden"}), 403
     user_id = session.get('user_id')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT mfa_enabled, username FROM users WHERE user_id = %s;", (user_id,))
         row = cursor.fetchone()
@@ -1777,7 +1505,7 @@ def admin_mfa_enable():
     
     user_id = session.get('user_id')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET mfa_secret = %s, mfa_enabled = TRUE WHERE user_id = %s;", (pending_secret, user_id))
         conn.commit()
@@ -1825,7 +1553,7 @@ def admin_overview():
     if session.get('role') != 'ADMIN':
         return jsonify({"error": "FORBIDDEN: Admin clearance required"}), 403
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*), COUNT(CASE WHEN status='ACTIVE' THEN 1 END) FROM institutions;")
         _inst_row = cursor.fetchone()
@@ -1866,7 +1594,7 @@ def admin_get_institutions():
     if session.get('role') != 'ADMIN':
         return jsonify({"error": "Forbidden"}), 403
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT i.institution_id, i.institution_name, i.institution_code, i.status, i.created_at,
@@ -1909,7 +1637,7 @@ def admin_create_institution():
     inst_id = f"INST-{clean_code[:6]}-{uuid.uuid4().hex[:4].upper()}"
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO institutions (institution_id, institution_name, institution_code, status)
@@ -1931,7 +1659,7 @@ def admin_toggle_institution_status(inst_id):
     data = request.json or {}
     status = data.get('status', 'ACTIVE')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE institutions SET status = %s WHERE institution_id = %s;", (status, inst_id))
         conn.commit()
@@ -1965,7 +1693,7 @@ def admin_get_users():
     query += " ORDER BY u.created_at DESC;"
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
@@ -1994,7 +1722,7 @@ def admin_get_audit_logs():
         return jsonify({"error": "FORBIDDEN: Admin clearance required"}), 403
     inst_filter = request.args.get('institution_id')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         if inst_filter and inst_filter != 'ALL':
             cursor.execute("""
@@ -2048,7 +1776,7 @@ def admin_create_supervisor():
     pwd_hash = generate_password_hash(password)
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO users (name, username, password_hash, role, institution_id, status)
@@ -2082,7 +1810,7 @@ def get_scoped_students():
 
     rows = []
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         if filter_inst and filter_inst != 'ALL':
             cursor.execute("""
@@ -2163,7 +1891,7 @@ def admin_get_students():
 
     rows = []
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
@@ -2222,7 +1950,7 @@ def admin_create_student():
         print(f"[DB] SQLite admin create student error: {sqle}")
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO students (student_id, name, institution_id)
@@ -2245,7 +1973,7 @@ def admin_toggle_user_status(user_id):
     data = request.json or {}
     status = data.get('status', 'ACTIVE')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET status = %s WHERE user_id = %s RETURNING username, institution_id;", (status, user_id))
         row = cursor.fetchone()
@@ -2270,7 +1998,7 @@ def admin_reset_user_password(user_id):
         return jsonify({"error": "New password is required"}), 400
     pwd_hash = generate_password_hash(new_password)
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET password_hash = %s WHERE user_id = %s RETURNING username, institution_id;", (pwd_hash, user_id))
         row = cursor.fetchone()
@@ -2294,7 +2022,7 @@ def get_student_details(student_id):
     user_inst = session.get('institution_id')
     
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT s.student_id, s.name, s.institution_id, i.institution_name,
@@ -2308,22 +2036,18 @@ def get_student_details(student_id):
         conn.close()
 
         if not row:
-            # Fallback to local SQLite DB
-            try:
-                conn_s = sqlite3.connect(SQLITE_DB_PATH)
-                cur_s = conn_s.cursor()
-                cur_s.execute("""
-                    SELECT s.student_id, s.name, s.institution_id, i.institution_name,
-                           CASE WHEN s.arcface_templates IS NOT NULL OR s.face_encoding IS NOT NULL THEN 1 ELSE 0 END AS enrolled
-                    FROM students s
-                    LEFT JOIN institutions i ON s.institution_id = i.institution_id
-                    WHERE s.student_id = ?;
-                """, (student_id,))
-                row = cur_s.fetchone()
-                cur_s.close()
-                conn_s.close()
-            except Exception as sqle:
-                pass
+            # Fallback to users table
+            conn2 = connect_db()
+            cursor2 = conn2.cursor()
+            cursor2.execute("""
+                SELECT u.student_id, u.name, u.institution_id, i.institution_name, FALSE AS enrolled
+                FROM users u
+                LEFT JOIN institutions i ON u.institution_id = i.institution_id
+                WHERE u.student_id = %s;
+            """, (student_id,))
+            row = cursor2.fetchone()
+            cursor2.close()
+            conn2.close()
 
         if not row:
             return jsonify({"error": "Student not found"}), 404
@@ -2571,7 +2295,7 @@ def register():
 
     # 2. Also save to PostgreSQL if online
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO students (student_id, name, arcface_templates, institution_id)
@@ -3074,7 +2798,7 @@ def end_session():
 
     inst_id = session.get('institution_id', 'INST-001')
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO exam_sessions (institution_id, supervisor_id, status, duration_seconds, report_url)
@@ -3130,7 +2854,7 @@ def get_timeline():
 
     events = []
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         query = """
             SELECT event_uuid, time_str, student_id, student_name, institution_id,
@@ -3260,7 +2984,7 @@ def resolve_timeline_event():
                 ev["state_change"]["alert"] = ["CREATED", "RESOLVED"]
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("UPDATE action_timeline SET resolved = TRUE, state_change = jsonb_set(COALESCE(state_change, '{}'::jsonb), '{alert}', '[\"CREATED\", \"RESOLVED\"]'::jsonb) WHERE event_uuid = %s;", (event_id,))
         conn.commit()
@@ -3333,9 +3057,7 @@ def log_to_db(student_id, risk_score, direction, status, institution_id=None):
 
 
 def _db_writer():
-    """Drains the telemetry queue on its own thread. Fail-fast connect timeout +
-    a circuit breaker: on failure it logs ONCE, pauses writes for 60s, and drains
-    (drops) events meanwhile, so the DB being down is a quiet no-op, not a flood."""
+    """Drains the telemetry queue on its own thread."""
     while True:
         item = _db_queue.get()
         now = time.time()
@@ -3343,7 +3065,7 @@ def _db_writer():
             continue  # circuit open -- drop this event
         sid_val, inst, risk, direction, status = item
         try:
-            conn = psycopg2.connect(DB_URL, connect_timeout=2)
+            conn = connect_db()
             try:
                 cur = conn.cursor()
                 cur.execute(
@@ -3467,27 +3189,17 @@ def start_identification_worker():
 RECOG_DEBUG = os.environ.get("PROCTOR_DEBUG", "0").lower() in ("1", "true", "on")
 
 # ---- Phone detection thread -------------------------------------------
-PHONE_INTERVAL = 0.04         # High-responsiveness continuous phone detection (25 FPS)
-PHONE_RESULT_TTL = 0.6       # How long a SLOW-worker hit stays valid. Kept short
-                             # so the box clears promptly on removal -- the fast
-                             # per-frame pass now provides continuous coverage.
-PHONE_WHOLE_FRAME_EVERY = 1  # Continuous whole-frame + person-ROI scanning on every pass
-# Minimum seconds per yolo26s confirm-pass cycle. This is a CPU GOVERNOR, not a
-# latency knob. Measured reality on a CPU-only box: ONE yolo26s inference is
-# ~118ms alone but ~300ms while the stream/face threads run, and ONNX Runtime
-# grabs cores during it. Running back-to-back (or even at 3 FPS) starved the face
-# pipeline to 0 processed frames -> missed faces, "no signal" -- the exact
-# regression this task fixes. A 1.0s floor holds phone confirm to ~1 FPS, keeping
-# its CPU duty cycle low so the face/tracking/stream threads get the rest. The
-# fast per-frame pass (yolo11n@384, in _ai_worker_loop) still flags phones
-# instantly, so phone responsiveness does not depend on this.
-PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "1.0"))
-PHONE_FAST_CONF = 0.35       # min confidence for the FAST per-frame phone pass
-                             # (rides on the main yolo11n/yolov8n person inference)
+YOLO_IMGSZ = 480              # Fast inference size for per-frame person + phone detection
+PHONE_INTERVAL = 0.02         # High-responsiveness continuous phone detection
+PHONE_RESULT_TTL = 0.8        # Smooth TTL bridging worker passes with zero flicker
+PHONE_WHOLE_FRAME_EVERY = 1   # Continuous whole-frame + person-ROI scanning on every pass
+PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "0.15")) # 6-7 FPS dedicated YOLO26s pass
+PHONE_FAST_CONF = 0.20        # High recall for partial and edge phone appearances
 
 _phone_lock = threading.Lock()
 _phone_input = {"frame": None, "persons": []}   # legacy, no longer the feed path
 _phone_output = {"boxes": [], "ts": 0.0}
+_last_phone_detection_ts = 0.0
 # Latest person boxes from the AI loop. The phone worker reads this to aim its
 # round-robin ROI crop, but never waits on it -- it pulls frames itself so the
 # face pipeline can never stall phone detection.
@@ -3498,15 +3210,8 @@ _phone_thread_started = False
 def _phone_worker():
     """Object-detection loop, INDEPENDENT of the face/AI pipeline.
 
-    Two fixes over the old design, both were latency/stability bugs:
-      * It used to wait for the AI loop to hand it a frame via _phone_input, so
-        a slow MediaPipe/ArcFace iteration starved phone detection. It now reads
-        _latest_raw_frame directly -- a slow face pass can no longer delay a
-        phone flag (and vice versa).
-      * It used to sleep PHONE_INTERVAL after every pass. It now runs ONE
-        inference per pass, rate-capped by PHONE_MIN_CYCLE (a CPU governor) so
-        it never oversubscribes the CPU and starves the face/tracking/stream
-        threads -- root cause of the detection-freeze / "no signal" regression.
+    Pulls latest raw camera frames directly without queuing or backlog.
+    Runs high-recall YOLO26s inference with bounded cycle time for ultra-low latency.
     """
     last_ts = 0.0
     roi_index = 0
@@ -3521,7 +3226,7 @@ def _phone_worker():
             frame = _latest_raw_frame
             ts = _latest_raw_ts
         if frame is None or ts <= last_ts:
-            time.sleep(0.02)
+            time.sleep(0.01)
             continue
         last_ts = ts
         frame = frame.copy()
@@ -3543,9 +3248,7 @@ def _phone_worker():
         except Exception as e:
             print(f"[PHONE] detection pass failed: {e}")
 
-        # CPU governor: cap the confirm-pass rate so the face/tracking/stream
-        # threads always get cores. Sleeping here yields the GIL and frees the
-        # CPU that ONNX Runtime was using during inference.
+        # Rate-capped cycle to yield CPU
         elapsed = time.time() - cycle_start
         if elapsed < PHONE_MIN_CYCLE:
             time.sleep(PHONE_MIN_CYCLE - elapsed)
@@ -4075,7 +3778,7 @@ def _ai_worker_loop():
     """The AI detection loop. Runs YOLO person detection, MediaPipe
     FaceLandmarker, ArcFace identity matching and the behavior engines off the
     video stream's critical path. Never blocks camera preview."""
-    global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops, _phone_person_boxes
+    global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops, _phone_person_boxes, _last_phone_detection_ts
     last_ai_ts = 0.0
     last_log_time = 0.0
 
@@ -4166,7 +3869,17 @@ def _ai_worker_loop():
                 draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 0, 255), 2,
                                  "CELL PHONE DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
 
-        room_state["phone_detected"] = len(phone_boxes) > 0
+        # Temporal smoothing for stable phone state
+        if len(phone_boxes) > 0:
+            _last_phone_detection_ts = now
+            room_state["phone_detected"] = True
+        else:
+            # Hold detection for 0.45s to prevent flicker on momentary partial occlusions
+            if (now - _last_phone_detection_ts) < 0.45:
+                room_state["phone_detected"] = True
+            else:
+                room_state["phone_detected"] = False
+
         room_state["smartwatch_detected"] = len(smartwatch_boxes) > 0
         room_state["earbud_detected"] = len(earbud_boxes) > 0
         room_state["book_detected"] = False
@@ -4629,7 +4342,7 @@ def api_alerts():
         return jsonify({"error": "FORBIDDEN: Cross-institution alert access violation"}), 403
 
     try:
-        conn = psycopg2.connect(DB_URL)
+        conn = connect_db()
         cursor = conn.cursor()
 
         if role == 'ADMIN':
@@ -4696,4 +4409,6 @@ if __name__ == '__main__':
     # stays idle and does NOT touch the camera until someone actually views
     # /video_feed, leaving the webcam free for the enrollment page.
     start_camera_worker()
-    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+    host = os.environ.get('HOST', '0.0.0.0')
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host=host, port=port, debug=False, threaded=True)

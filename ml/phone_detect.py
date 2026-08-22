@@ -32,25 +32,19 @@ TARGET_CLASSES = [CLASS_PHONE, CLASS_LAPTOP, CLASS_CLOCK, CLASS_BOOK, CLASS_TV, 
 
 # Object-specific confidence thresholds
 CONF_THRESHOLDS = {
-    CLASS_PHONE: 0.25,    # High recall for partial and occluded mobile devices
+    CLASS_PHONE: 0.20,    # High recall for partial, tilted, and occluded mobile devices
     CLASS_LAPTOP: 0.35,   # High accuracy for laptops
-    CLASS_CLOCK: 0.28,    # Smartwatch / Wristwatch
-    CLASS_BOOK: 0.35,     # Study materials / Printed notes
-    CLASS_TV: 0.35,       # Tablets / Screens
-    CLASS_REMOTE: 0.30,   # Electronic devices
+    CLASS_CLOCK: 0.25,    # Smartwatch / Wristwatch
+    CLASS_BOOK: 0.32,     # Study materials / Printed notes
+    CLASS_TV: 0.32,       # Tablets / Screens
+    CLASS_REMOTE: 0.28,   # Electronic devices
 }
 
-DEFAULT_CONF = 0.25
+DEFAULT_CONF = 0.20
 ROI_IMGSZ = 640              # High-resolution magnification for person/hand crop
 
-# Cap this detector's ONNX Runtime thread pool. Uncapped, ORT grabs EVERY core,
-# and when its inference overlapped the torch-based face model (which also grabs
-# every core) the box oversubscribed and every worker stalled for seconds -- the
-# detection freeze and "no signal" blackouts. Kept small (~3): the confirm pass
-# only needs ~1 FPS (the per-frame fast pass handles instant phone response), so
-# a tight cap leaves the bulk of the cores free for the face/tracking/stream
-# threads and avoids the periodic multi-second spike when the two overlap.
-_ORT_THREADS = max(2, min(3, (os.cpu_count() or 4) // 4)) if (os.cpu_count() or 4) >= 8 else 2
+# Cap this detector's ONNX Runtime thread pool.
+_ORT_THREADS = max(2, min(4, (os.cpu_count() or 4) // 2)) if (os.cpu_count() or 4) >= 4 else 2
 
 # Minimal COCO name map for the classes we care about (used on the raw-ONNX
 # path, which does not carry ultralytics' full names dict).
@@ -74,15 +68,15 @@ DEFAULT_WHOLE_IMGSZ = 640    # High-resolution whole-frame scanning
 
 # Asymmetric person ROI padding:
 # Expands generously downwards and sideways to enclose candidate hands, desk, and lap.
-ROI_PAD_X = 0.35
-ROI_PAD_Y_TOP = 0.20
-ROI_PAD_Y_BOT = 0.45
+ROI_PAD_X = 0.40
+ROI_PAD_Y_TOP = 0.25
+ROI_PAD_Y_BOT = 0.50
 
-# Plausibility limits
-MIN_SIDE_PX = 8                  # minimum side length in pixels
+# Plausibility limits for partial and small objects
+MIN_SIDE_PX = 6                  # minimum side length in pixels (supports partial edge / corners)
 MAX_AREA_FRAC_OF_PERSON = 0.85   # allows large laptops / tablets relative to person box
-MIN_ASPECT = 0.15                # w/h; allows vertical, horizontal, and partial slivers
-MAX_ASPECT = 6.0
+MIN_ASPECT = 0.08                # w/h; allows vertical, horizontal, and partial slivers
+MAX_ASPECT = 12.0
 
 
 def _iou(a, b):
@@ -108,7 +102,7 @@ def plausible(box, cls_id, person_box=None):
     if person_box is not None and cls_id in (CLASS_PHONE, CLASS_CLOCK, CLASS_REMOTE):
         px1, py1, px2, py2 = person_box
         parea = max((px2 - px1) * (py2 - py1), 1.0)
-        if (w * h) / parea > 0.40:
+        if (w * h) / parea > 0.65:
             return False, "too large relative to person"
     return True, "ok"
 
@@ -116,17 +110,18 @@ def plausible(box, cls_id, person_box=None):
 class PhoneDetector:
     """Multi-device and prohibited object detector for real-time and replay CCTV."""
 
-# <<<<<<< Updated upstream
-    def __init__(self, weights="yolo11s.pt", conf=DEFAULT_CONF):
-        path = os.path.join(BASE, weights)
-        if not os.path.exists(path):
-            fallback = os.path.join(BASE, "yolo11n.pt")
+    def __init__(self, weights="yolov8n.pt", conf=DEFAULT_CONF):
+        # Path resolution
+        if os.path.isabs(weights) and os.path.exists(weights):
+            path = weights
+        elif os.path.exists(os.path.join(BASE, weights)):
+            path = os.path.join(BASE, weights)
+        elif os.path.exists(os.path.join(BASE, "models", weights)):
+            path = os.path.join(BASE, "models", weights)
+        else:
+            fallback = os.path.join(BASE, "models", "yolov8n.pt")
             path = fallback if os.path.exists(fallback) else weights
-# =======
-    def __init__(self, weights="yolo26s.pt", conf=PHONE_CONF):
-        path = weights if os.path.isabs(weights) else os.path.join(MODEL_DIR, weights)
-        self.model = YOLO(path if os.path.exists(path) else weights)
-# >>>>>>> Stashed changes
+
         self.conf = conf
         self.weights = weights
         self.is_onnx = str(path).lower().endswith(".onnx")
