@@ -852,29 +852,39 @@ def load_students():
     gallery.people.clear()
     legacy_only = []
     
-    rows = []
-    # 1. Try PostgreSQL if available
+    students_map = {}
+
+    # 1. Load from SQLite local persistent DBs
+    for db_file in [SQLITE_DB_PATH, os.path.join(BASE_DIR, "backend", "proctorai.db")]:
+        if os.path.exists(db_file):
+            try:
+                conn = sqlite3.connect(db_file)
+                cursor = conn.cursor()
+                cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
+                for r in cursor.fetchall():
+                    sid_str = str(r[0])
+                    if sid_str not in students_map or (r[3] and not students_map[sid_str][3]):
+                        students_map[sid_str] = r
+                cursor.close()
+                conn.close()
+            except Exception as sqle:
+                pass
+
+    # 2. Also query PostgreSQL/adapter to incorporate any remotely enrolled students
     try:
         conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
-        rows = cursor.fetchall()
+        for r in cursor.fetchall():
+            sid_str = str(r[0])
+            if sid_str not in students_map or r[3]:
+                students_map[sid_str] = r
         cursor.close()
         conn.close()
     except Exception as e:
         pass
 
-    # 2. If PostgreSQL returned 0 rows or is offline, load from persistent SQLite DB
-    if not rows:
-        try:
-            conn = sqlite3.connect(SQLITE_DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT student_id, name, face_encoding, arcface_templates, institution_id FROM students;")
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
-        except Exception as sqle:
-            print(f"[DB] Error loading students from SQLite: {sqle}")
+    rows = list(students_map.values())
 
     for sid, name, legacy_enc, arc, inst_id in rows:
         inst = inst_id or "INST-001"
