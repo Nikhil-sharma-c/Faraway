@@ -3739,6 +3739,147 @@ def _update_face_tracks(prev_gray, gray, now):
     return render
 
 
+_device_tracks = {}
+_next_dev_id = 1
+
+
+def _update_device_tracks(direct_boxes, now):
+    """Smooth real-time bounding box interpolation for phones & prohibited devices.
+    Runs on every camera frame at 30 FPS. Interpolates bounding boxes seamlessly
+    towards the latest YOLO26s detections with zero lag and zero jumping.
+    """
+    global _device_tracks, _next_dev_id
+
+    unmatched_dets = []
+    matched_track_ids = set()
+
+    for d in direct_boxes:
+        dx1, dy1, dx2, dy2 = [float(v) for v in d["bbox"]]
+        d_box = np.array([dx1, dy1, dx2, dy2], dtype=np.float32)
+        pconf = float(d["conf"])
+        dev_type = d.get("device_type", "phone")
+
+        # Color & label mapping
+        if dev_type == "phone":
+            color = (0, 0, 255)
+            title = "CELL PHONE DETECTED"
+            sub = f"PROHIBITED DEVICE · {pconf:.0%}"
+        elif dev_type == "smartwatch":
+            color = (0, 140, 255)
+            title = "SMARTWATCH DETECTED"
+            sub = f"PROHIBITED DEVICE · {pconf:.0%}"
+        elif dev_type == "earbud":
+            color = (0, 165, 255)
+            title = "EARBUD DETECTED"
+            sub = f"PROHIBITED DEVICE · {pconf:.0%}"
+        elif dev_type == "laptop":
+            color = (0, 120, 255)
+            title = "LAPTOP DETECTED"
+            sub = f"PROHIBITED DEVICE · {pconf:.0%}"
+        elif dev_type == "book":
+            color = (0, 100, 255)
+            title = "UNAUTHORIZED NOTES DETECTED"
+            sub = f"PROHIBITED ITEM · {pconf:.0%}"
+        elif dev_type == "tablet":
+            color = (0, 120, 255)
+            title = "TABLET / SCREEN DETECTED"
+            sub = f"PROHIBITED DEVICE · {pconf:.0%}"
+        else:
+            color = (0, 0, 255)
+            title = "PROHIBITED DEVICE DETECTED"
+            sub = f"SECURITY ALERT · {pconf:.0%}"
+
+        # Match by IoU first, fallback to nearest center distance
+        best_tid = None
+        best_score = -1e9
+        d_cx, d_cy = (dx1 + dx2) * 0.5, (dy1 + dy2) * 0.5
+
+        for tid, trk in _device_tracks.items():
+            if tid in matched_track_ids or trk["dev_type"] != dev_type:
+                continue
+            tb = trk["box"]
+            t_cx, t_cy = (tb[0] + tb[2]) * 0.5, (tb[1] + tb[3]) * 0.5
+            dist = float(np.hypot(d_cx - t_cx, d_cy - t_cy))
+            iou = float(phone_detect._iou(d_box, tb))
+
+            if iou > 0.05:
+                score = 1000.0 + iou * 100.0 - dist * 0.1
+            elif dist < 300.0:  # within fast motion range
+                score = 500.0 - dist
+            else:
+                score = -1e9
+
+            if score > best_score and score > 0:
+                best_score = score
+                best_tid = tid
+
+        if best_tid is not None:
+            matched_track_ids.add(best_tid)
+            trk = _device_tracks[best_tid]
+            trk["target_box"] = d_box
+            trk["conf"] = 0.7 * trk["conf"] + 0.3 * pconf
+            trk["title"] = title
+            trk["sub"] = sub
+            trk["last_seen"] = now
+        else:
+            unmatched_dets.append({
+                "box": d_box.copy(),
+                "target_box": d_box.copy(),
+                "conf": pconf,
+                "dev_type": dev_type,
+                "title": title,
+                "sub": sub,
+                "color": color,
+                "last_seen": now
+            })
+
+    # Add new tracks immediately for zero appearance latency
+    for ud in unmatched_dets:
+        tid = f"dev_{_next_dev_id}"
+        _next_dev_id += 1
+        _device_tracks[tid] = ud
+
+    # Interpolate and render all active tracks
+    rendered = []
+    to_delete = []
+
+    for tid, trk in list(_device_tracks.items()):
+        age = now - trk["last_seen"]
+        # If not seen for 0.45s, remove track cleanly
+        if age > 0.45:
+            to_delete.append(tid)
+            continue
+
+        curr_box = trk["box"]
+        target_box = trk["target_box"]
+
+        # Adaptive smoothing factor based on displacement distance
+        dist = float(np.max(np.abs(target_box - curr_box)))
+        if dist > 60.0:
+            alpha = 0.75
+        elif dist > 20.0:
+            alpha = 0.55
+        elif dist > 5.0:
+            alpha = 0.40
+        else:
+            alpha = 0.30
+
+        trk["box"] = (1.0 - alpha) * curr_box + alpha * target_box
+
+        b = trk["box"]
+        rendered.append({
+            "box": (int(b[0]), int(b[1]), int(b[2]), int(b[3])),
+            "color": trk["color"],
+            "title": trk["title"],
+            "sub": trk["sub"]
+        })
+
+    for tid in to_delete:
+        _device_tracks.pop(tid, None)
+
+    return rendered
+
+
 def _stream_worker():
     """Real-Time Stream Compositor Thread (the RENDER loop).
     Runs on every fresh camera frame: advances the per-frame face tracker,
@@ -3788,43 +3929,17 @@ def _stream_worker():
                 _, start, end, color = op
                 _render_gaze_arrow(annotated, start, end, color=color)
 
-        # Immediate low-latency phone/device rendering directly from phone worker
+        # Real-time smooth phone / device tracking (interpolated on every frame at native 30 FPS)
         with _phone_lock:
             phone_fresh = (now - _phone_output["ts"]) <= 0.6
             direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
 
-        for d in direct_boxes:
-            px1, py1, px2, py2 = [int(v) for v in d["bbox"]]
-            pconf = float(d["conf"])
-            dev_type = d.get("device_type", "phone")
-            if dev_type == "phone":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 0, 255),
-                                thickness=2, title="CELL PHONE DETECTED",
-                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
-            elif dev_type == "smartwatch":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 140, 255),
-                                thickness=2, title="SMARTWATCH DETECTED",
-                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
-            elif dev_type == "earbud":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 165, 255),
-                                thickness=2, title="EARBUD DETECTED",
-                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
-            elif dev_type == "laptop":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 120, 255),
-                                thickness=2, title="LAPTOP DETECTED",
-                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
-            elif dev_type == "book":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 100, 255),
-                                thickness=2, title="UNAUTHORIZED NOTES DETECTED",
-                                subtitle=f"PROHIBITED ITEM · {pconf:.0%}")
-            elif dev_type == "tablet":
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 120, 255),
-                                thickness=2, title="TABLET / SCREEN DETECTED",
-                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
-            else:
-                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 0, 255),
-                                thickness=2, title="PROHIBITED DEVICE DETECTED",
-                                subtitle=f"SECURITY ALERT · {pconf:.0%}")
+        smooth_devices = _update_device_tracks(direct_boxes, now)
+        for sdev in smooth_devices:
+            px1, py1, px2, py2 = sdev["box"]
+            _render_hud_box(annotated, (px1, py1), (px2, py2), sdev["color"],
+                            thickness=2, title=sdev["title"],
+                            subtitle=sdev["sub"])
 
         # Tracked face boxes + eye markers, drawn at the native frame rate
         for tf in tracked_faces:

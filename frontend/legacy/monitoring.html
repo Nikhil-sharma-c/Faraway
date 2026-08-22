@@ -2420,6 +2420,10 @@ const $actEmpty        = el('activityEmpty');
 // ── APP STATE ────────────────────────────────
 let displayedStudents  = new Set();
 let prevAlerts         = [];
+let phoneLastSeenTs    = 0;
+let phoneActiveAlert   = false;
+let bookLastSeenTs     = 0;
+let bookActiveAlert    = false;
 let sessionStart       = null;
 let sessionTimerInt    = null;
 let feedOnline         = false;
@@ -2983,28 +2987,44 @@ async function fetchLiveStatus() {
         renderRoster(data.students);
         renderReadout(data);
 
-        // Security Event Triggers & Alerts
-        if (data.phone_detected && !prevAlerts.includes('phone')) {
-            sessionStats.phoneEvents++;
-            sessionStats.criticalAlerts++;
-            addAlert('Critical Threat: Cell phone detected in exam zone!', 'danger', 20);
-            logActivity('CRITICAL: Phone detection triggered');
-            prevAlerts.push('phone');
-        } else if (!data.phone_detected && prevAlerts.includes('phone')) {
-            addAlert('Prohibited phone removed from frame.', 'success');
-            logActivity('Phone removed from area');
-            prevAlerts = prevAlerts.filter(a => a !== 'phone');
+        // Security Event Triggers & Alerts (Debounced Hysteresis & Deduplication)
+        const now = Date.now();
+        if (data.phone_detected) {
+            phoneLastSeenTs = now;
+            if (!phoneActiveAlert) {
+                phoneActiveAlert = true;
+                sessionStats.phoneEvents++;
+                sessionStats.criticalAlerts++;
+                addAlert('Critical Threat: Cell phone detected in exam zone!', 'danger', 20);
+                logActivity('CRITICAL: Phone detection triggered');
+                if (!prevAlerts.includes('phone')) prevAlerts.push('phone');
+            }
+        } else if (phoneActiveAlert) {
+            // Only fire removal alert after 1.5s of confirmed continuous absence
+            if (now - phoneLastSeenTs >= 1500) {
+                phoneActiveAlert = false;
+                addAlert('Prohibited phone removed from frame.', 'success');
+                logActivity('Phone removed from area');
+                prevAlerts = prevAlerts.filter(a => a !== 'phone');
+            }
         }
 
-        if (data.book_detected && !prevAlerts.includes('book')) {
-            sessionStats.criticalAlerts++;
-            addAlert('Critical Threat: Prohibited book/notes detected!', 'danger', 15);
-            logActivity('CRITICAL: Prohibited material detected');
-            prevAlerts.push('book');
-        } else if (!data.book_detected && prevAlerts.includes('book')) {
-            addAlert('Prohibited material removed from frame.', 'success');
-            logActivity('Material removed');
-            prevAlerts = prevAlerts.filter(a => a !== 'book');
+        if (data.book_detected) {
+            bookLastSeenTs = now;
+            if (!bookActiveAlert) {
+                bookActiveAlert = true;
+                sessionStats.criticalAlerts++;
+                addAlert('Critical Threat: Prohibited book/notes detected!', 'danger', 15);
+                logActivity('CRITICAL: Prohibited material detected');
+                if (!prevAlerts.includes('book')) prevAlerts.push('book');
+            }
+        } else if (bookActiveAlert) {
+            if (now - bookLastSeenTs >= 1500) {
+                bookActiveAlert = false;
+                addAlert('Prohibited material removed from frame.', 'success');
+                logActivity('Material removed');
+                prevAlerts = prevAlerts.filter(a => a !== 'book');
+            }
         }
 
         // Tiered, debounced unregistered-person alerting. Severity is decided
