@@ -2137,19 +2137,11 @@ def validate_face():
                 valid_faces.append(f)
 
         face_count = len(valid_faces)
-        if face_count > 1:
-            # Check if there is a primary foreground face significantly larger than background faces
-            valid_faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
-            primary_area = float(valid_faces[0]["bbox"][2]) * float(valid_faces[0]["bbox"][3])
-            runner_up_area = float(valid_faces[1]["bbox"][2]) * float(valid_faces[1]["bbox"][3])
-            if primary_area >= 2.2 * runner_up_area and primary_area > 2000:
-                valid_faces = [valid_faces[0]]
-                face_count = 1
 
-        # MANDATORY ONE PERSON PER UPLOAD RULE:
-        # face_count == 1 -> VALID (GREEN ✓)
-        # face_count == 0 -> INVALID (RED ✕)
-        # face_count > 1  -> INVALID (RED ✕) Group / cricket / team / crowd photos rejected
+        # STRICT RULE: ONLY ONE PERSON MAY BE VISIBLE DURING BIOMETRIC ENROLLMENT.
+        # face_count == 1 -> VALID (GREEN)
+        # face_count == 0 -> INVALID (No face)
+        # face_count >= 2 -> BLOCKED (Multiple Faces Detected)
         if face_count == 1:
             f = valid_faces[0]
             bbox = [float(v) for v in f["bbox"][:4]]
@@ -2178,15 +2170,15 @@ def validate_face():
                 category="AI DETECTION",
                 event_type="MULTIPLE_FACES_REJECTED",
                 title="Multiple Faces Rejected in Upload",
-                description=f"Batch enrollment rejected image with {face_count} detected faces (group photo).",
+                description=f"Biometric registration rejected upload with {face_count} detected faces.",
                 severity="HIGH_RISK",
                 state_change={"validation": ["SCANNING", "INVALID"]}
             )
             return jsonify({
                 "valid": False,
                 "faces_count": face_count,
-                "error": f"Multiple faces detected ({face_count} faces)",
-                "message": "Multiple faces detected — Invalid"
+                "error": "Multiple Faces Detected",
+                "message": "Multiple Faces Detected — Only one person may be visible during registration."
             }), 200
         else:
             record_timeline_event(
@@ -2249,18 +2241,11 @@ def register():
             rejected.append(f"frame {idx+1}: no face")
             continue
 
-        # Enforce strict single-candidate clarity during biometric registration
+        # STRICT RULE: ONLY ONE PERSON MAY BE VISIBLE DURING BIOMETRIC ENROLLMENT.
+        # If face_count >= 2 -> BLOCK enrollment for this frame.
         if len(faces) > 1:
-            faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
-            primary_area = float(faces[0]["bbox"][2]) * float(faces[0]["bbox"][3])
-            runner_up_area = float(faces[1]["bbox"][2]) * float(faces[1]["bbox"][3])
-            # If multiple significant faces are detected, reject frame to prevent ambiguous enrollment corruption
-            if primary_area < 2.5 * runner_up_area or runner_up_area > 3000:
-                rejected.append(f"frame {idx+1}: multiple faces detected ({len(faces)} faces) — ensure only target candidate is in view")
-                continue
-
-        # Sort detected faces by area descending to prioritize the primary subject in the foreground
-        faces.sort(key=lambda x: float(x["bbox"][2]) * float(x["bbox"][3]), reverse=True)
+            rejected.append(f"frame {idx+1}: Multiple Faces Detected — Only one person may be visible during registration.")
+            continue
 
         chosen_face = None
         fail_reason = "quality check failed"
@@ -2374,6 +2359,28 @@ def get_session_evidence():
 @app.route('/api/session/start', methods=['POST'])
 def start_session():
     global SESSION_ACTIVE, session_start_time, session_paused_time
+    
+    # STRICT RULE: ONLY ONE PERSON MAY BE IN FRAME WHEN STARTING THE EXAM.
+    # Check current active face count in live camera
+    total_faces = len(current_students_in_frame) + int(room_state.get("unknown_count", 0))
+    with _raw_lock:
+        raw_check_frame = _latest_raw_frame.copy() if _latest_raw_frame is not None else None
+    if raw_check_frame is not None:
+        try:
+            cur_dets = face_detector.detect(raw_check_frame, thresh=0.38)
+            if len(cur_dets) > 1:
+                total_faces = max(total_faces, len(cur_dets))
+        except Exception:
+            pass
+
+    if total_faces >= 2:
+        return jsonify({
+            "success": False,
+            "error": "Multiple People Detected — Only one person is allowed in frame.",
+            "message": "Multiple People Detected — Only one person is allowed in frame.",
+            "face_count": total_faces
+        }), 400
+
     fresh_session = accumulated_elapsed_seconds == 0
     SESSION_ACTIVE = True
     session_start_time = datetime.now()
@@ -4051,18 +4058,11 @@ def _seed_face_tracks(face_dets, now):
     """Called by the DETECTION loop. Hands authoritative boxes + labels to the
     tracker as CORRECTIONS. The stream worker fuses them and re-seeds optical
     flow on its own frame. This never draws anything itself."""
-    global _unknown_track_seq
     with _tracks_lock:
         claimed = set()
         for det in face_dets:
-            sid = det["sid"]
-            if sid:
-                key = sid
-            else:
-                key = _match_unknown_key(det["box"], claimed)
-                if key is None:
-                    key = f"unk::{_unknown_track_seq}"
-                    _unknown_track_seq += 1
+            # Key directly by the stabilizer's unique spatial track ID (idt1, idt2, ...)
+            key = det.get("tid") or det.get("sid") or f"track_{len(claimed)}"
             claimed.add(key)
 
             t = _face_tracks.get(key)
@@ -4079,10 +4079,9 @@ def _seed_face_tracks(face_dets, now):
             t["last_det_ts"] = now
             t["needs_reseed"] = True
 
-        # Drop stale unknown tracks the detector no longer reports and that the
-        # flow layer will not have re-seeded (registered tracks persist by sid).
+        # Drop stale tracks that are no longer reported by the detector/stabilizer
         for key in list(_face_tracks.keys()):
-            if key.startswith("unk::") and key not in claimed:
+            if key not in claimed:
                 if (now - _face_tracks[key].get("last_det_ts", 0)) * 1000.0 > TRACK_MAX_PREDICT_MS:
                     del _face_tracks[key]
 
@@ -4753,9 +4752,14 @@ def _ai_worker_loop():
                 # Hand this detection to the per-frame tracker instead of
                 # drawing a static box -- the render loop moves it every frame.
                 face_dets.append({
-                    "sid": sid, "box": (sfx1, sfy1, sfx2, sfy2),
-                    "title": title, "sub": sub, "color": color,
-                    "iris": iris_pts, "gaze": gaze_arrows,
+                    "tid": _st["tid"],
+                    "sid": sid,
+                    "box": (sfx1, sfy1, sfx2, sfy2),
+                    "title": title,
+                    "sub": sub,
+                    "color": color,
+                    "iris": iris_pts,
+                    "gaze": gaze_arrows,
                 })
             else:
                 # Not committed to an identity. 'pending' = present too briefly
@@ -4770,9 +4774,14 @@ def _ai_worker_loop():
                 else:  # pending -- neutral, non-alarming, not counted
                     _title, _sub, _color = "IDENTIFYING...", "Verifying identity", (0, 200, 255)
                 face_dets.append({
-                    "sid": None, "box": (sfx1, sfy1, sfx2, sfy2),
-                    "title": _title, "sub": _sub,
-                    "color": _color, "iris": iris_pts, "gaze": [],
+                    "tid": _st["tid"],
+                    "sid": None,
+                    "box": (sfx1, sfy1, sfx2, sfy2),
+                    "title": _title,
+                    "sub": _sub,
+                    "color": _color,
+                    "iris": iris_pts,
+                    "gaze": [],
                 })
 
         # Publish this cycle's detections to the per-frame tracker. The render

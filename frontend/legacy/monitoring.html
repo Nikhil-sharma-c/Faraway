@@ -3745,12 +3745,25 @@ $startSessionBtn.addEventListener('click', async () => {
     }
     $timerDisplay.textContent = formatSessionTime(sessionElapsed);
     addAlert('Examination session initiated.', 'success');
-    logActivity('Examination session started by supervisor');
-
     try {
         const res = await fetch(`${BASE}/api/session/start`, { method: 'POST', credentials: 'include' });
         if (res.ok) {
             checkSessionStatus();
+        } else {
+            const errData = await res.json().catch(() => ({}));
+            const errMsg = errData.error || errData.message || 'Unable to start examination session';
+            addAlert(errMsg, 'danger', 15);
+            logActivity(`EXAM START BLOCKED: ${errMsg}`);
+            sessionActive = false;
+            stopSessionTimer();
+            sessionElapsed = 0;
+            $timerDisplay.textContent = '00:00:00';
+            $startSessionBtn.style.display = 'inline-flex';
+            $endSessionBtn.style.display   = 'none';
+            if (!$globalBanner.classList.contains('threat')) {
+                $globalBanner.className = 'session-pill paused';
+                $globalText.textContent = 'SESSION STANDBY';
+            }
         }
     } catch {
         // Offline / preview standalone mode
