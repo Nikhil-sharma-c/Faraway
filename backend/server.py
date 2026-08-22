@@ -3854,14 +3854,16 @@ def _update_device_tracks(direct_boxes, now):
 
         # Adaptive smoothing factor based on displacement distance
         dist = float(np.max(np.abs(target_box - curr_box)))
-        if dist > 60.0:
+        if dist > 100.0:
+            alpha = 0.90   # Rapid snap for fast movements (zero drag)
+        elif dist > 45.0:
             alpha = 0.75
-        elif dist > 20.0:
+        elif dist > 15.0:
             alpha = 0.55
-        elif dist > 5.0:
+        elif dist > 3.0:
             alpha = 0.40
         else:
-            alpha = 0.30
+            alpha = 0.25   # Rock-solid stability for micro-vibrations
 
         trk["box"] = (1.0 - alpha) * curr_box + alpha * target_box
 
