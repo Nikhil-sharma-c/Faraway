@@ -1275,8 +1275,13 @@ def auth_login():
     # Database connection & lookup
     try:
         conn = connect_db()
+        if not conn:
+            print(f"[AUTH] connect_db returned None", flush=True)
+            return jsonify({"error": "Database connection unavailable"}), 503
     except Exception as db_err:
-        print(f"[AUTH] Database connection failed: {db_err}")
+        import traceback
+        traceback.print_exc()
+        print(f"[AUTH] Database connection failed: {db_err}", flush=True)
         return jsonify({"error": "Database connection unavailable"}), 503
 
     try:
@@ -1291,7 +1296,9 @@ def auth_login():
         cursor.close()
         conn.close()
     except Exception as query_err:
-        print(f"[AUTH] Database query error: {query_err}")
+        import traceback
+        traceback.print_exc()
+        print(f"[AUTH] Database query error: {query_err}", flush=True)
         return jsonify({"error": "Database connection unavailable"}), 503
 
     if not row:
