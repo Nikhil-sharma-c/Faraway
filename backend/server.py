@@ -3218,6 +3218,7 @@ _phone_lock = threading.Lock()
 _phone_input = {"frame": None, "persons": []}   # legacy, no longer the feed path
 _phone_output = {"boxes": [], "ts": 0.0, "frame_ts": 0.0, "latency_ms": 0.0}
 _last_phone_detection_ts = 0.0
+_phone_frame_event = threading.Event()
 # Latest person boxes from the AI loop. The phone worker reads this to aim its
 # round-robin ROI crop, but never waits on it -- it pulls frames itself so the
 # face pipeline can never stall phone detection.
@@ -3240,7 +3241,8 @@ def _phone_worker():
             continue
 
         # Wakes up immediately when a new camera frame arrives
-        _raw_frame_event.wait(timeout=0.03)
+        _phone_frame_event.wait(timeout=0.03)
+        _phone_frame_event.clear()
 
         with _raw_lock:
             frame = _latest_raw_frame
@@ -3442,6 +3444,7 @@ def _camera_capture_worker():
             _latest_raw_frame = frame
             _latest_raw_ts = now
         _raw_frame_event.set()
+        _phone_frame_event.set()
 
 
 def _render_hud_box(img, pt1, pt2, color, thickness, title, subtitle=None):
