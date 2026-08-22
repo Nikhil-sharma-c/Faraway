@@ -18,6 +18,9 @@ import base64
 import struct
 import sqlite3
 from ultralytics import YOLO
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Cap torch's CPU thread pool. Ultralytics/torch defaults to ~one thread per core;
 # combined with the phone model's ONNX Runtime pool and the ArcFace pool, that

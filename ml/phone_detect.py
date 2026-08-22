@@ -116,11 +116,17 @@ def plausible(box, cls_id, person_box=None):
 class PhoneDetector:
     """Multi-device and prohibited object detector for real-time and replay CCTV."""
 
+# <<<<<<< Updated upstream
     def __init__(self, weights="yolo11s.pt", conf=DEFAULT_CONF):
         path = os.path.join(BASE, weights)
         if not os.path.exists(path):
             fallback = os.path.join(BASE, "yolo11n.pt")
             path = fallback if os.path.exists(fallback) else weights
+# =======
+    def __init__(self, weights="yolo26s.pt", conf=PHONE_CONF):
+        path = weights if os.path.isabs(weights) else os.path.join(MODEL_DIR, weights)
+        self.model = YOLO(path if os.path.exists(path) else weights)
+# >>>>>>> Stashed changes
         self.conf = conf
         self.weights = weights
         self.is_onnx = str(path).lower().endswith(".onnx")
