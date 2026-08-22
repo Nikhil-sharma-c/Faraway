@@ -3136,6 +3136,15 @@ room_state = {
 # tracked_students dictionary: { "STU-1002": {"name": "John", "risk_score": 0, "status": "Active", "last_seen": time.time()} }
 tracked_students = {}
 
+# Students recognised in the current AI frame. Assigned every iteration inside
+# _ai_worker_loop, but it must exist at module scope from the start: endpoints
+# such as /api/session/start read it, and on a freshly launched server (Start
+# clicked from enrollment before the monitoring feed has driven the AI loop
+# through its first assignment) an undefined name here raised NameError -> 500
+# "Failed to initialize session". Initialised empty so the roster is simply
+# "nobody yet" until the loop populates it.
+current_students_in_frame = set()
+
 import queue as _queue
 _db_queue = _queue.Queue(maxsize=2000)
 _db_state = {"ok": True, "last_err_log": 0.0, "disabled_until": 0.0}
