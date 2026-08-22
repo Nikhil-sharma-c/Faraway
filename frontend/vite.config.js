@@ -15,6 +15,8 @@ export default defineConfig({
     proxy: {
       '/api': BACKEND,
       '/video_feed': BACKEND,
+      '/evidence': BACKEND,
+      '/reports': BACKEND,
       '/models': BACKEND,
       // Any bare legacy page & asset → Flask (replay.html, replay.css, theme.css, etc.)
       [LEGACY_ASSETS_RE]: BACKEND,

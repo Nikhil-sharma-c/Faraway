@@ -124,7 +124,6 @@ class PhoneDetector:
         else:
             fallback = os.path.join(BASE, "models", "yolov8n.pt")
             path = fallback if os.path.exists(fallback) else weights
-
         self.conf = conf
         self.weights = weights
         self.is_onnx = str(path).lower().endswith(".onnx")

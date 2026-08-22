@@ -15,12 +15,23 @@ stream of false "unregistered person entered / departed" events. Here each
 observed face is matched to a persistent track, and the track's identity is
 STICKY:
 
-  * A track that has recently matched an enrolled id keeps that identity for
-    ID_HOLD_SECONDS after the last confirming match -- momentary misses are
-    invisible.
+  * CONFIRM-ONCE, THEN HOLD FOR THE LIFE OF THE TRACK. The FIRST time a track
+    matches an enrolled id it is CONFIRMED, and it stays committed to that
+    identity for as long as the track keeps being observed -- i.e. until the
+    person genuinely leaves frame and the track is pruned (TRACK_STALE_S).
+    A confirmed track does NOT revert to "identifying" after some timeout: a
+    momentary recognition miss, or even a long run of misses while the person
+    stands still, is invisible. Re-verification happens continuously and
+    quietly in the background -- every confident per-frame match refreshes the
+    identity -- but only a GENUINELY DIFFERENT confident identity (a different
+    person on the same spatial track) or the track going stale ever changes
+    the committed identity. This is what stops the on-video tag cycling
+    "confirmed -> IDENTIFYING... -> confirmed" for someone who never left.
   * A track that has NEVER been identified is only reported as UNKNOWN after it
     has persisted unmatched for NEW_UNKNOWN_DWELL_S -- a face flashing past in
-    the background does not immediately raise a critical alert.
+    the background does not immediately raise a critical alert, and a
+    genuinely new person still goes through the "IDENTIFYING..." (pending)
+    state exactly once before being confirmed.
   * Severity scales with how long an unknown track has genuinely persisted.
 
 Pure python (standard library only) so the logic is unit-testable without a
@@ -32,8 +43,14 @@ import time
 # ---------------------------------------------------------------------------
 # Tunables -- edit these, not the logic. All times in seconds.
 # ---------------------------------------------------------------------------
-ID_HOLD_SECONDS      = 1.5   # keep a committed identity this long after the
-                             # last confirming match (hysteresis against dips)
+ID_HOLD_SECONDS      = 1.5   # DEPRECATED as a revert timer. A confirmed track
+                             # is now held for its whole life (see class
+                             # docstring), NOT dropped this long after the last
+                             # match -- reverting-on-timeout was the bug that
+                             # made an already-confirmed, continuously-present
+                             # person cycle back to "IDENTIFYING...". Kept only
+                             # so external imports don't break; not used to
+                             # revert a confirmed identity anywhere below.
 NEW_UNKNOWN_DWELL_S  = 2.5   # a never-identified track must persist unmatched
                              # this long before it counts as UNKNOWN at all
 TRACK_STALE_S        = 2.0   # drop a track not observed for this long (person
@@ -108,7 +125,7 @@ class IdentityStabilizer:
                     "cx": f["cx"], "cy": f["cy"], "created": now,
                     "last_seen": now, "last_known_sid": None,
                     "last_known_name": None, "last_match_ts": 0.0,
-                    "unknown_since": None,
+                    "unknown_since": None, "confirmed": False,
                 }
             claimed.add(tid)
             assign[i] = tid
@@ -120,12 +137,25 @@ class IdentityStabilizer:
 
             raw = f.get("sid")
             if raw:
-                t["last_known_sid"] = raw
-                t["last_known_name"] = f.get("name")
+                # A confident recognition this frame. First match on this track
+                # CONFIRMS it; a later match to a DIFFERENT id means a genuinely
+                # different person now occupies this spatial track, so switch.
+                # A match to the SAME id is quiet background re-verification and
+                # just refreshes the name/timestamp -- it does not reset any UI
+                # state, since the track is already 'known' below.
+                if raw != t["last_known_sid"]:
+                    t["last_known_sid"] = raw
+                t["last_known_name"] = f.get("name") or t["last_known_name"]
                 t["last_match_ts"] = now
+                t["confirmed"] = True
 
-            if t["last_known_sid"] and (now - t["last_match_ts"]) <= ID_HOLD_SECONDS:
-                # Sticky: hold the identity through a momentary miss.
+            if t["confirmed"] and t["last_known_sid"]:
+                # Held for the LIFE OF THE TRACK: once confirmed, stay committed
+                # to this identity for as long as the track is observed. The
+                # track is only dropped by the staleness prune below (person
+                # actually left frame), never by a recognition dip -- so an
+                # already-confirmed, continuously-present person never reverts to
+                # the "IDENTIFYING..." (pending) state. See class docstring.
                 committed, cname, state = t["last_known_sid"], t["last_known_name"], "known"
                 t["unknown_since"] = None
             else:

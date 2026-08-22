@@ -996,11 +996,355 @@ body::after {
 .pem-footer {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 0.85rem;
     padding: 1.15rem 1.5rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(255, 255, 255, 0.015);
+}
+
+.pem-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+}
+
+/* ── CRITICAL INCIDENT VIDEO EVIDENCE UI ── */
+.pem-evidence-section {
+    background: rgba(14, 20, 32, 0.70);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--r-md);
+    padding: 1.1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.pem-evidence-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.pem-evidence-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.pem-evidence-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-sm);
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: var(--danger);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pem-evidence-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #F5F7FA;
+    letter-spacing: -0.01em;
+}
+
+.pem-evidence-subtitle {
+    font-size: 0.68rem;
+    color: var(--t3);
+}
+
+.pem-evidence-count-badge {
+    font-size: 0.65rem;
+    font-family: var(--mono);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--t3);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 0.2rem 0.6rem;
+    border-radius: 99px;
+}
+
+.pem-evidence-count-badge.has-clips {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.30);
+}
+
+.pem-evidence-container {
+    max-height: 280px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.pem-evidence-empty {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 1.25rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+    border-radius: var(--r-sm);
+}
+
+.pem-empty-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--t2);
+    margin-bottom: 0.15rem;
+}
+
+.pem-empty-desc {
+    font-size: 0.70rem;
+    color: var(--t4);
+    line-height: 1.4;
+}
+
+.pem-evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.85rem;
+}
+
+@media (max-width: 680px) {
+    .pem-evidence-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.pem-evidence-card {
+    background: rgba(10, 14, 23, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--r-sm);
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.pem-evidence-card:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    transform: translateY(-1px);
+}
+
+.pem-ev-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+}
+
+.pem-ev-time-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--cyan);
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+}
+
+.pem-ev-clock {
+    color: var(--t4);
+    font-size: 0.64rem;
+    font-weight: 500;
+}
+
+.pem-ev-badge {
+    font-size: 0.60rem;
+    font-family: var(--mono);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.18rem 0.45rem;
+    border-radius: 4px;
+}
+
+.pem-ev-badge-danger {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.pem-ev-badge-warning {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.pem-ev-player-box {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #030712;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pem-ev-video-wrapper {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.pem-ev-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.pem-ev-video-placeholder {
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at center, rgba(30, 41, 59, 0.7) 0%, rgba(3, 7, 18, 0.95) 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+}
+
+.pem-ev-video-placeholder.pem-ev-processing {
+    cursor: progress;
+}
+
+.pem-ev-processing-status {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: #cbd5e1;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.pem-ev-processing-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(56, 189, 248, 0.25);
+    border-top-color: var(--cyan);
+    border-radius: 50%;
+    animation: pem-evidence-spin 0.8s linear infinite;
+}
+
+.pem-ev-processing-note {
+    margin-top: 0.35rem;
+    color: var(--t4);
+    font-size: 0.62rem;
+}
+
+@keyframes pem-evidence-spin {
+    to { transform: rotate(360deg); }
+}
+
+.pem-ev-rec-hud {
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.06em;
+}
+
+.pem-ev-rec-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #ef4444;
+    display: inline-block;
+    margin-right: 4px;
+    animation: blink 1.2s infinite ease-in-out;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+}
+
+.pem-ev-play-trigger {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease, background 0.2s ease;
+    backdrop-filter: blur(4px);
+}
+
+.pem-ev-video-placeholder:hover .pem-ev-play-trigger {
+    transform: scale(1.1);
+    background: rgba(2, 132, 199, 0.6);
+    border-color: rgba(56, 189, 248, 0.8);
+}
+
+.pem-ev-hud-overlay {
+    position: absolute;
+    bottom: 6px;
+    left: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.pem-ev-threat-box-label {
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.25);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    padding: 0.12rem 0.35rem;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.pem-ev-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.pem-ev-desc {
+    font-size: 0.72rem;
+    color: #cbd5e1;
+    line-height: 1.35;
+}
+
+.pem-ev-candidate {
+    font-size: 0.65rem;
+    color: var(--t4);
+}
+
+.pem-ev-candidate strong {
+    color: var(--t2);
 }
 
 /* ═════════════════════════════════════════════════════════════════════
@@ -2176,7 +2520,12 @@ body::after {
                         <span class="hud-alert-text" id="hudAlertText">Critical event</span>
                     </div>
 
-                    <img id="cctvFeedImg" src="/video_feed" alt="Live examination feed"
+                    <!-- No static src: on the Vite dev server a relative
+                         /video_feed hits the proxy, which cannot relay the MJPEG
+                         stream and hangs with no data and no error (silent black
+                         feed). JS sets the src to the backend directly (see
+                         connectFeed) and a watchdog reconnects if no frame arrives. -->
+                    <img id="cctvFeedImg" alt="Live examination feed"
                          class="cctv-img" onerror="onFeedError()" onload="onFeedLoaded()">
 
                     <div class="feed-offline show" id="feedOffline">
@@ -2312,6 +2661,34 @@ body::after {
                     <span class="pem-card-sub">ArcFace Biometric Match</span>
                 </div>
             </div>
+
+            <!-- ═══════════════════════════════════════════════════════════════
+                 TIMESTAMPED CRITICAL INCIDENT VIDEO EVIDENCE UI
+                 ═══════════════════════════════════════════════════════════════ -->
+            <div class="pem-evidence-section">
+                <div class="pem-evidence-header">
+                    <div class="pem-evidence-title-wrap">
+                        <div class="pem-evidence-icon">
+                            <i data-lucide="video" style="width:16px;height:16px;"></i>
+                        </div>
+                        <div>
+                            <h3 class="pem-evidence-title">Critical Incident Video Evidence</h3>
+                            <p class="pem-evidence-subtitle">Timestamped CCTV evidence recordings of detected threats</p>
+                        </div>
+                    </div>
+                    <span class="pem-evidence-count-badge" id="pemEvidenceCountBadge">0 Clips</span>
+                </div>
+
+                <div class="pem-evidence-container custom-scroll" id="pemEvidenceList">
+                    <div class="pem-evidence-empty" id="pemEvidenceEmpty">
+                        <i data-lucide="shield-check" style="width:28px;height:28px;opacity:0.4;color:var(--success);"></i>
+                        <div>
+                            <div class="pem-empty-title">No Critical Incidents Logged</div>
+                            <div class="pem-empty-desc">Zero security breaches or prohibited items recorded during this session.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="pem-footer">
@@ -2319,10 +2696,12 @@ body::after {
                 <i data-lucide="rotate-ccw" style="width:13px;height:13px;"></i>
                 Start New Session
             </button>
-            <button class="btn btn-primary" id="pemReportBtn" style="cursor:pointer;padding:0.6rem 1.35rem;border-radius:var(--r-sm);font-size:0.78rem;font-weight:700;display:inline-flex;align-items:center;gap:0.4rem;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:1px solid rgba(56,189,248,0.4);box-shadow:0 4px 14px rgba(2,132,199,0.35);">
-                <i data-lucide="file-text" style="width:13px;height:13px;"></i>
-                View Detailed Report
-            </button>
+            <div class="pem-footer-right">
+                <button class="btn btn-primary" id="pemReportBtn" style="cursor:pointer;padding:0.6rem 1.35rem;border-radius:var(--r-sm);font-size:0.78rem;font-weight:700;display:inline-flex;align-items:center;gap:0.4rem;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:1px solid rgba(56,189,248,0.4);box-shadow:0 4px 14px rgba(2,132,199,0.35);">
+                    <i data-lucide="file-text" style="width:13px;height:13px;"></i>
+                    View Detailed Report
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -2558,7 +2937,25 @@ function updateExamScore(students) {
 }
 
 // ── VIDEO FEED STATE HANDLERS ────────────────
+// The MJPEG feed MUST come from the backend directly. On the Vite dev server a
+// relative /video_feed is proxied, and Vite's proxy cannot relay a
+// multipart/x-mixed-replace stream -- it hangs with no data AND no error, which
+// showed as a permanently black feed. BASE already resolves to the backend
+// origin off-5001, so we always load ${BASE}/video_feed and never the proxy.
+let _feedWatchdog = null;
+function connectFeed() {
+    if (!$feedImg) return;
+    $feedImg.src = `${BASE}/video_feed?ts=${Date.now()}`;
+    // Watchdog: a silent proxy/backend hang fires no onerror, so if no frame has
+    // rendered within a few seconds, treat it as a failure and reconnect.
+    if (_feedWatchdog) clearTimeout(_feedWatchdog);
+    _feedWatchdog = setTimeout(() => {
+        if (!feedOnline) onFeedError();
+    }, 6000);
+}
+
 function onFeedLoaded() {
+    if (_feedWatchdog) { clearTimeout(_feedWatchdog); _feedWatchdog = null; }
     feedOnline    = true;
     backendOnline = true;
     $feedOffline.classList.remove('show');
@@ -2584,13 +2981,12 @@ function onFeedError() {
     $feedImg.style.display       = 'none';
     $cctvDot.style.background    = 'var(--t4)';
     $cctvDot.style.boxShadow     = 'none';
-    // Stream reconnect is INDEPENDENT of detection health: force a fresh MJPEG
-    // connection shortly after any gap (cache-busted so the browser opens a new
-    // stream rather than reusing the dead one).
+    // Force a fresh backend-direct MJPEG connection shortly after any gap
+    // (cache-busted so the browser opens a new stream, not the dead one).
     if (!_feedRetryTimer) {
         _feedRetryTimer = setTimeout(() => {
             _feedRetryTimer = null;
-            $feedImg.src = `${BASE}/video_feed?ts=${Date.now()}`;
+            connectFeed();
         }, 1000);
     }
 }
@@ -2787,6 +3183,206 @@ let sessionStats = {
     multiPersonEvents: 0,
     verified: false
 };
+
+// ── TIMESTAMPED VIDEO EVIDENCE STORE & ENGINE ────────────────
+let sessionEvidenceClips = [];
+let lastEvidenceTimestamps = {};
+let evidencePollingToken = 0;
+
+const EVIDENCE_DETAILS = {
+    PHONE_DETECTED: ['Cell Phone Detected', 'Mobile device detected in active proctoring zone.'],
+    SMARTWATCH_DETECTED: ['Smartwatch Detected', 'Smartwatch detected in active proctoring zone.'],
+    EARBUD_DETECTED: ['Earbud Detected', 'Earbud detected in active proctoring zone.'],
+    PROHIBITED_MATERIAL: ['Prohibited Book / Notes Detected', 'Unauthorized physical material detected in exam zone.']
+};
+
+function escapeEvidenceHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[char]));
+}
+
+function evidenceVideoUrl(fileUrl) {
+    if (!fileUrl) return null;
+    const url = String(fileUrl);
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith('/')) return `${BASE}${url}`;
+    return `${BASE}/${url}`;
+}
+
+function normalizeEvidenceClip(clip) {
+    const details = EVIDENCE_DETAILS[clip.type] || [clip.title || 'Critical Incident', clip.description || ''];
+    const status = clip.status || (clip.file_url || clip.videoUrl ? 'ready' : 'metadata');
+    return {
+        id: clip.id || `ev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type: clip.type || 'CRITICAL_INCIDENT',
+        title: clip.title || details[0],
+        description: clip.description || details[1],
+        severity: clip.severity || 'CRITICAL',
+        badgeClass: clip.badgeClass || (String(clip.severity || 'CRITICAL').toUpperCase() === 'CRITICAL' ? 'danger' : 'warning'),
+        timecode: clip.session_timecode || clip.timecode || '00:00:00',
+        clockTime: clip.clock_time || clip.clockTime || '',
+        candidateName: clip.candidate_name || clip.candidateName || 'Monitored Candidate',
+        candidateId: clip.candidate_id || clip.candidateId || 'N/A',
+        status,
+        videoUrl: evidenceVideoUrl(clip.file_url || clip.videoUrl)
+    };
+}
+
+function mergeEvidenceClips(backendClips) {
+    const backend = Array.isArray(backendClips) ? backendClips.map(normalizeEvidenceClip) : [];
+    const fallback = sessionEvidenceClips.map(normalizeEvidenceClip);
+    if (!backend.length) return fallback;
+
+    // The backend registry is authoritative for video URLs/status. Keep a
+    // frontend-only item only when no server clip of that incident type exists.
+    const serverTypes = new Set(backend.map(clip => clip.type));
+    return [...backend, ...fallback.filter(clip => !serverTypes.has(clip.type))];
+}
+
+async function fetchSessionEvidence() {
+    try {
+        const response = await fetch(`${BASE}/api/session/evidence`, { credentials: 'include' });
+        if (!response.ok) return [];
+        const data = await response.json();
+        return Array.isArray(data.clips) ? data.clips : [];
+    } catch {
+        return [];
+    }
+}
+
+async function pollEvidenceUntilReady(token) {
+    for (let attempt = 0; attempt < 10 && token === evidencePollingToken; attempt++) {
+        const backendClips = await fetchSessionEvidence();
+        if (backendClips.length) {
+            const merged = mergeEvidenceClips(backendClips);
+            sessionEvidenceClips = merged;
+            renderEvidenceSection(merged);
+            if (!merged.some(clip => clip.status === 'recording')) return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+}
+
+function recordEvidenceClip(type, title, description, severity, badgeClass) {
+    if (!sessionActive) return;
+    const now = Date.now();
+    // Debounce to prevent duplicate clips for the same continuous incident within 6 seconds
+    if (lastEvidenceTimestamps[type] && (now - lastEvidenceTimestamps[type] < 6000)) {
+        return;
+    }
+    lastEvidenceTimestamps[type] = now;
+
+    const candidateDisplay = sessionStats.candidateName || 'Monitored Candidate';
+    const candidateIdDisplay = sessionStats.candidateId || 'N/A';
+
+    const evidenceItem = {
+        id: 'ev_' + now + '_' + Math.random().toString(36).substr(2, 4),
+        timecode: formatSessionTime(sessionElapsed),
+        clockTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
+        type: type,
+        title: title,
+        description: description,
+        severity: severity,
+        badgeClass: badgeClass || 'danger',
+        candidateName: candidateDisplay,
+        candidateId: candidateIdDisplay,
+        status: 'metadata',
+        videoUrl: null
+    };
+    sessionEvidenceClips.push(evidenceItem);
+
+    // The server starts the real recorder on the same detection edge. Refresh
+    // its registry so local metadata is replaced by a recording/ready MP4.
+    void fetchSessionEvidence().then(backendClips => {
+        if (backendClips.length) sessionEvidenceClips = mergeEvidenceClips(backendClips);
+    });
+}
+
+function renderEvidenceSection(clips) {
+    const listEl = document.getElementById('pemEvidenceList');
+    const countBadge = document.getElementById('pemEvidenceCountBadge');
+    if (!listEl) return;
+
+    if (countBadge) {
+        const count = clips ? clips.length : 0;
+        countBadge.textContent = count > 0 ? `${count} Evidence Clip${count > 1 ? 's' : ''}` : '0 Clips';
+        if (count > 0) {
+            countBadge.classList.add('has-clips');
+        } else {
+            countBadge.classList.remove('has-clips');
+        }
+    }
+
+    if (!clips || clips.length === 0) {
+        listEl.innerHTML = `
+            <div class="pem-evidence-empty" id="pemEvidenceEmpty">
+                <i data-lucide="shield-check" style="width:28px;height:28px;opacity:0.4;color:var(--success);"></i>
+                <div>
+                    <div class="pem-empty-title">No Critical Incidents Logged</div>
+                    <div class="pem-empty-desc">Zero security breaches or prohibited items were recorded during this session.</div>
+                </div>
+            </div>
+        `;
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
+
+    let html = '<div class="pem-evidence-grid">';
+    clips.map(normalizeEvidenceClip).forEach((c, idx) => {
+        const safeId = escapeEvidenceHtml(c.id);
+        const safeTimecode = escapeEvidenceHtml(c.timecode);
+        const safeClockTime = escapeEvidenceHtml(c.clockTime);
+        const safeTitle = escapeEvidenceHtml(c.title);
+        const safeDescription = escapeEvidenceHtml(c.description);
+        const safeCandidateName = escapeEvidenceHtml(c.candidateName);
+        const safeCandidateId = escapeEvidenceHtml(c.candidateId);
+        const safeVideoUrl = escapeEvidenceHtml(c.videoUrl || '');
+        const safeSeverity = escapeEvidenceHtml(c.severity);
+        const safeBadgeClass = c.badgeClass === 'warning' ? 'warning' : 'danger';
+        const player = c.status === 'ready' && c.videoUrl ? `
+            <video class="pem-ev-video" controls preload="metadata" src="${safeVideoUrl}"></video>
+        ` : c.status === 'recording' ? `
+            <div class="pem-ev-video-placeholder pem-ev-processing" title="Evidence clip is still encoding">
+                <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>REC EVIDENCE</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
+                <div class="pem-ev-processing-status"><span class="pem-ev-processing-spinner"></span>PROCESSING…</div>
+                <div class="pem-ev-processing-note">Finalizing local MP4 evidence clip</div>
+            </div>
+        ` : `
+            <div class="pem-ev-video-placeholder" title="No video file is available yet">
+                <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>EVIDENCE #${idx + 1}</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
+                <div class="pem-ev-play-trigger"><i data-lucide="video" style="width:18px;height:18px;"></i></div>
+                <div class="pem-ev-hud-overlay"><span class="pem-ev-threat-box-label"><i data-lucide="alert-triangle" style="width:10px;height:10px;"></i> ${safeTitle.toUpperCase()}</span></div>
+            </div>
+        `;
+        html += `
+            <div class="pem-evidence-card" id="${safeId}">
+                <div class="pem-ev-top">
+                    <div class="pem-ev-time-pill">
+                        <i data-lucide="clock" style="width:11px;height:11px;"></i>
+                        <span>${safeTimecode}</span>
+                        <span class="pem-ev-clock">(${safeClockTime})</span>
+                    </div>
+                    <span class="pem-ev-badge pem-ev-badge-${safeBadgeClass}">${safeSeverity}: ${safeTitle}</span>
+                </div>
+
+                <div class="pem-ev-player-box">
+                    <div class="pem-ev-video-wrapper">
+                        ${player}
+                    </div>
+                </div>
+
+                <div class="pem-ev-meta">
+                    <div class="pem-ev-desc">${safeDescription}</div>
+                    <div class="pem-ev-candidate">Target: <strong>${safeCandidateName}</strong> (${safeCandidateId})</div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    listEl.innerHTML = html;
+    if (window.lucide) lucide.createIcons();
+}
 
 // ── SUBJECT ROSTER (left column) ─────────────────
 // Renders who is in frame right now, worst risk first, so the operator never
@@ -2997,6 +3593,7 @@ async function fetchLiveStatus() {
                 sessionStats.criticalAlerts++;
                 addAlert('Critical Threat: Cell phone detected in exam zone!', 'danger', 20);
                 logActivity('CRITICAL: Phone detection triggered');
+                recordEvidenceClip('PHONE_DETECTED', 'Cell Phone Detected', 'Mobile device detected in active proctoring zone.', 'CRITICAL', 'danger');
                 if (!prevAlerts.includes('phone')) prevAlerts.push('phone');
             }
         } else if (phoneActiveAlert) {
@@ -3016,6 +3613,7 @@ async function fetchLiveStatus() {
                 sessionStats.criticalAlerts++;
                 addAlert('Critical Threat: Prohibited book/notes detected!', 'danger', 15);
                 logActivity('CRITICAL: Prohibited material detected');
+                recordEvidenceClip('PROHIBITED_MATERIAL', 'Prohibited Book / Notes Detected', 'Unauthorized physical material detected in exam zone.', 'CRITICAL', 'danger');
                 if (!prevAlerts.includes('book')) prevAlerts.push('book');
             }
         } else if (bookActiveAlert) {
@@ -3025,6 +3623,28 @@ async function fetchLiveStatus() {
                 logActivity('Material removed');
                 prevAlerts = prevAlerts.filter(a => a !== 'book');
             }
+        }
+
+        if (data.smartwatch_detected && !prevAlerts.includes('smartwatch')) {
+            sessionStats.criticalAlerts++;
+            addAlert('Critical Threat: Smartwatch detected in exam zone!', 'danger', 15);
+            logActivity('CRITICAL: Smartwatch detection triggered');
+            recordEvidenceClip('SMARTWATCH_DETECTED', 'Smartwatch Detected', 'Smartwatch detected in active proctoring zone.', 'CRITICAL', 'danger');
+            prevAlerts.push('smartwatch');
+        } else if (!data.smartwatch_detected && prevAlerts.includes('smartwatch')) {
+            addAlert('Prohibited smartwatch removed from frame.', 'success');
+            prevAlerts = prevAlerts.filter(a => a !== 'smartwatch');
+        }
+
+        if (data.earbud_detected && !prevAlerts.includes('earbud')) {
+            sessionStats.criticalAlerts++;
+            addAlert('Critical Threat: Earbud detected in exam zone!', 'danger', 15);
+            logActivity('CRITICAL: Earbud detection triggered');
+            recordEvidenceClip('EARBUD_DETECTED', 'Earbud Detected', 'Earbud detected in active proctoring zone.', 'CRITICAL', 'danger');
+            prevAlerts.push('earbud');
+        } else if (!data.earbud_detected && prevAlerts.includes('earbud')) {
+            addAlert('Prohibited earbud removed from frame.', 'success');
+            prevAlerts = prevAlerts.filter(a => a !== 'earbud');
         }
 
         // Tiered, debounced unregistered-person alerting. Severity is decided
@@ -3114,6 +3734,9 @@ async function fetchLiveStatus() {
 $startSessionBtn.addEventListener('click', async () => {
     sessionActive = true;
     startSessionTimer();
+    evidencePollingToken += 1;
+    sessionEvidenceClips = [];
+    lastEvidenceTimestamps = {};
     $startSessionBtn.style.display = 'none';
     $endSessionBtn.style.display   = 'inline-flex';
     if (!$globalBanner.classList.contains('threat')) {
@@ -3180,6 +3803,12 @@ $endSessionBtn.addEventListener('click', async () => {
     document.getElementById('pemGazeEvents').textContent     = `${sessionStats.gazeEvents}`;
     document.getElementById('pemVerification').textContent   = candVerification;
     
+    // The backend owns the real files and their encoding status. Client-side
+    // alert metadata remains only as an offline fallback.
+    const backendEvidence = await fetchSessionEvidence();
+    sessionEvidenceClips = mergeEvidenceClips(backendEvidence);
+    renderEvidenceSection(sessionEvidenceClips);
+
     const pemBadge = document.getElementById('pemFinalStatus');
     if (pemBadge) {
         if (sessionStats.maxRisk > 75) {
@@ -3205,6 +3834,8 @@ $endSessionBtn.addEventListener('click', async () => {
         modal.classList.add('show');
         if (window.lucide) lucide.createIcons();
     }
+    evidencePollingToken += 1;
+    void pollEvidenceUntilReady(evidencePollingToken);
 
     const reportBtn = document.getElementById('pemReportBtn');
     if (reportBtn) {
@@ -3222,7 +3853,8 @@ $endSessionBtn.addEventListener('click', async () => {
 document.getElementById('pemCloseBtn').addEventListener('click', () => {
     const modal = document.getElementById('postExamModal');
     if (modal) modal.classList.remove('show');
-    // Reset session metrics
+    evidencePollingToken += 1;
+    // Reset session metrics & evidence
     sessionStats = {
         candidateName: null,
         candidateId: null,
@@ -3235,6 +3867,9 @@ document.getElementById('pemCloseBtn').addEventListener('click', () => {
         multiPersonEvents: 0,
         verified: false
     };
+    sessionEvidenceClips = [];
+    lastEvidenceTimestamps = {};
+    renderEvidenceSection([]);
     alertCount = 0;
     if ($unknownBadge) {
         $unknownBadge.textContent = '0 Active';
@@ -3327,7 +3962,7 @@ function init() {
     }
 
     if ($feedImg) {
-        $feedImg.src = `${BASE}/video_feed`;
+        connectFeed();   // backend-direct feed + reconnect watchdog
     }
 
     checkAuthContext();

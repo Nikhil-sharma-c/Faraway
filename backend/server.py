@@ -8,12 +8,14 @@ import hashlib
 import secrets
 import threading
 import uuid
+import collections
 import numpy as np
 import psycopg2
 from flask import Flask, Response, jsonify, send_from_directory, request, session, redirect
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
+from html import escape as html_escape
 import base64
 import struct
 import sqlite3
@@ -62,6 +64,18 @@ sys.path.insert(0, PROJECT_ROOT)
 CONFIG_PATH = os.path.join(BASE_DIR, "backend", "config.json")
 REPORTS_DIR = os.path.join(BASE_DIR, "backend", "reports")
 os.makedirs(REPORTS_DIR, exist_ok=True)
+
+# Local, filesystem-backed forensic video evidence.  Evidence deliberately
+# stays out of the database: the registry below only indexes the files for the
+# active session and for the generated report.
+EVIDENCE_DIR = os.path.join(BASE_DIR, "backend", "evidence")
+os.makedirs(EVIDENCE_DIR, exist_ok=True)
+PRE_ROLL_SECONDS = float(os.environ.get("EVIDENCE_PRE_ROLL_SECONDS", "5"))
+POST_ROLL_SECONDS = float(os.environ.get("EVIDENCE_POST_ROLL_SECONDS", "10"))
+EVIDENCE_FPS = float(os.environ.get("EVIDENCE_FPS", "10"))
+EVIDENCE_RESOLUTION = (640, 480)
+EVIDENCE_COOLDOWN = float(os.environ.get("EVIDENCE_COOLDOWN_SECONDS", "30"))
+EVIDENCE_BUFFER_FRAMES = int(os.environ.get("EVIDENCE_BUFFER_FRAMES", "150"))
 
 DEFAULT_CONFIG = {
     "setup_complete": False,
@@ -346,6 +360,12 @@ def serve_report(filename):
 
     record_audit_event(session.get('user_id'), session.get('username'), role, user_inst, 'REPORT_ACCESS', request.remote_addr, 'SUCCESS', f"Accessed examination report: {filename}")
     return send_from_directory(REPORTS_DIR, filename)
+
+
+@app.route('/evidence/<path:filename>')
+def serve_evidence(filename):
+    """Serve a locally stored evidence clip (including its date subdirectory)."""
+    return send_from_directory(EVIDENCE_DIR, filename, conditional=True)
 
 @app.route('/<path:path>')
 def serve_static(path):
@@ -2322,12 +2342,23 @@ def get_session_status():
         "start_time": session_start_time.timestamp() if session_start_time else None
     })
 
+
+@app.route('/api/session/evidence', methods=['GET'])
+def get_session_evidence():
+    """Return the active session's locally stored evidence clip index."""
+    with _evidence_clips_lock:
+        clips = [dict(clip) for clip in session_evidence_clips]
+    clips.sort(key=lambda clip: (clip.get("session_seconds", 0), clip.get("trigger_timestamp", 0)))
+    return jsonify({"clips": clips, "count": len(clips)})
+
 @app.route('/api/session/start', methods=['POST'])
 def start_session():
     global SESSION_ACTIVE, session_start_time, session_paused_time
+    fresh_session = accumulated_elapsed_seconds == 0
     SESSION_ACTIVE = True
     session_start_time = datetime.now()
     session_paused_time = None
+    _begin_evidence_session(fresh_session)
     
     # If starting fresh (no accumulated time), reset tracking state
     if accumulated_elapsed_seconds == 0:
@@ -2388,6 +2419,7 @@ def end_session():
     if SESSION_ACTIVE and session_start_time is not None:
         accumulated_elapsed_seconds += int((datetime.now() - session_start_time).total_seconds())
     SESSION_ACTIVE = False
+    _end_evidence_session()
     total_session_seconds = accumulated_elapsed_seconds
     session_start_time = None
     session_paused_time = None
@@ -2428,6 +2460,11 @@ def end_session():
         integrity_color = "#10b981"
         integrity_bg = "rgba(16,185,129,0.08)"
         integrity_dot = "#10b981"
+
+    # Snapshot the registry before rendering. Completed clips have atomically
+    # replaced their temporary files, so every embedded player is playable.
+    with _evidence_clips_lock:
+        evidence_snapshot = [dict(clip) for clip in session_evidence_clips]
 
     # Build student rows
     student_rows_html = ""
@@ -2503,6 +2540,40 @@ def end_session():
         insights.append("No students were monitored during this session. Ensure camera and enrollment are configured before starting a session.")
 
     insights_html = "".join(f'<div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.6rem 0;border-bottom:1px solid rgba(255,255,255,0.04);"><span style="color:#3b82f6;font-size:0.9rem;margin-top:1px;">›</span><span style="font-size:0.82rem;color:#8899b8;line-height:1.5;">{i}</span></div>' for i in insights)
+
+    ready_evidence = sorted(
+        (clip for clip in evidence_snapshot if clip.get("status") == "ready"),
+        key=lambda clip: (clip.get("session_seconds", 0), clip.get("trigger_timestamp", 0)),
+    )
+    recording_evidence = [clip for clip in evidence_snapshot if clip.get("status") == "recording"]
+    evidence_cards = []
+    for clip in ready_evidence:
+        timecode = html_escape(str(clip.get("session_timecode", "00:00:00")))
+        clock_time = html_escape(str(clip.get("clock_time", "")))
+        title = html_escape(str(clip.get("title", clip.get("type", "Evidence"))))
+        event_type = html_escape(str(clip.get("type", "CRITICAL INCIDENT")))
+        description = html_escape(str(clip.get("description", "")))
+        candidate_name = html_escape(str(clip.get("candidate_name", "N/A")))
+        candidate_id = html_escape(str(clip.get("candidate_id", "N/A")))
+        file_url = html_escape(str(clip.get("file_url", "")), quote=True)
+        duration = html_escape(str(clip.get("duration_seconds", "")))
+        evidence_cards.append(f'''<article style="background:#030712;border:1px solid rgba(239,68,68,.24);border-radius:9px;padding:.8rem;">
+            <div style="display:flex;justify-content:space-between;gap:.7rem;align-items:center;margin-bottom:.65rem;">
+                <span style="font-family:monospace;font-size:.7rem;color:#93c5fd;background:rgba(59,130,246,.14);padding:.18rem .4rem;border-radius:4px;">{timecode} · {clock_time}</span>
+                <span style="font-size:.64rem;font-weight:700;color:#fca5a5;background:rgba(239,68,68,.12);padding:.18rem .4rem;border-radius:4px;">CRITICAL · {event_type}</span>
+            </div>
+            <video controls preload="metadata" style="display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:6px;" src="{file_url}">Your browser cannot play this evidence video.</video>
+            <div style="margin-top:.65rem;font-size:.78rem;font-weight:700;color:#f8fafc;">{title}</div>
+            <div style="margin-top:.2rem;font-size:.72rem;color:#94a3b8;">{description}</div>
+            <div style="margin-top:.45rem;font-family:monospace;font-size:.65rem;color:#64748b;">Candidate: {candidate_name} ({candidate_id}) · {duration}s</div>
+        </article>''')
+
+    if evidence_cards:
+        evidence_html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;">' + ''.join(evidence_cards) + '</div>'
+    elif recording_evidence:
+        evidence_html = '''<div style="padding:1rem;border:1px dashed rgba(245,158,11,.35);border-radius:8px;color:#fbbf24;font-size:.78rem;">Evidence capture is still processing. This report was generated before its video file was finalized.</div>'''
+    else:
+        evidence_html = '''<div style="padding:1rem;border:1px dashed rgba(16,185,129,.3);border-radius:8px;color:#86efac;font-size:.8rem;font-weight:600;">No Critical Incidents — Session Integrity Verified</div>'''
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2747,6 +2818,17 @@ def end_session():
                     {student_rows_html}
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <!-- Timestamped Video Evidence & Threat Telemetry -->
+    <div class="r-section">
+        <div class="r-section-header">Timestamped Critical Threat Video Evidence</div>
+        <div class="insights-body">
+            <div style="font-size:0.8rem;color:#8899b8;line-height:1.5;margin-bottom:0.75rem;">
+                Playable MP4 evidence clips are indexed by session timecode and wall-clock capture time.
+            </div>
+            {evidence_html}
         </div>
     </div>
 
@@ -3206,6 +3288,10 @@ def start_identification_worker():
 # Debug/instrumentation flag: PROCTOR_DEBUG=1 turns on [PERF]/[RECOG] logging
 # used to diagnose the detection-freeze / oversubscription regression.
 RECOG_DEBUG = os.environ.get("PROCTOR_DEBUG", "0").lower() in ("1", "true", "on")
+# Per-frame track/overlay diagnostics: TRACK_DEBUG=1 logs, for every tracked
+# face each frame, the stabiliser track_id and the overlay state being rendered
+# (confirmed / identifying / unknown). Off by default (very chatty).
+TRACK_DEBUG = os.environ.get("TRACK_DEBUG", "0").lower() in ("1", "true", "on")
 
 # ---- Phone detection thread -------------------------------------------
 YOLO_IMGSZ = 480              # Fast inference size for per-frame person + phone detection
@@ -3327,6 +3413,342 @@ _latest_raw_frame = None
 _latest_raw_ts = 0.0
 _raw_frame_event = threading.Event()
 
+# Evidence capture intentionally has its own synchronization.  The raw-frame
+# lock is on the camera's hot path, so retaining a short pre-roll must never
+# contend with preview composition or inference.
+_evidence_buffer_lock = threading.Lock()
+_evidence_frame_buffer = collections.deque(maxlen=max(1, EVIDENCE_BUFFER_FRAMES))
+_evidence_clips_lock = threading.Lock()
+session_evidence_clips = []
+_evidence_cooldown_lock = threading.Lock()
+_evidence_last_capture = {}
+_evidence_lifecycle_lock = threading.Lock()
+_evidence_session_generation = 0
+_evidence_detection_epoch = 0
+
+_EVIDENCE_EVENT_DETAILS = {
+    "PHONE_DETECTED": {
+        "title": "Cell Phone Detected",
+        "description": "Mobile device detected in the active proctoring zone.",
+    },
+    "SMARTWATCH_DETECTED": {
+        "title": "Smartwatch Detected",
+        "description": "Smartwatch detected in the active proctoring zone.",
+    },
+    "EARBUD_DETECTED": {
+        "title": "Earbud Detected",
+        "description": "Earbud detected in the active proctoring zone.",
+    },
+    "PROHIBITED_MATERIAL": {
+        "title": "Prohibited Book or Notes Detected",
+        "description": "Prohibited book or notes detected in the active proctoring zone.",
+    },
+}
+
+
+def _clear_evidence_frame_buffer():
+    """Drop retained raw frames at a session boundary."""
+    with _evidence_buffer_lock:
+        _evidence_frame_buffer.clear()
+
+
+def _begin_evidence_session(fresh_session):
+    """Prepare evidence state for a start or resume without blocking video."""
+    global _evidence_session_generation, _evidence_detection_epoch
+    with _evidence_lifecycle_lock:
+        if fresh_session:
+            # A generation prevents a late writer from a prior session from
+            # registering a clip in a newly started session.
+            _evidence_session_generation += 1
+        # Reset transition detection even when resuming: a device already in
+        # view can still be captured, subject to the per-type cooldown.
+        _evidence_detection_epoch += 1
+
+    _clear_evidence_frame_buffer()
+    if fresh_session:
+        with _evidence_clips_lock:
+            session_evidence_clips.clear()
+        with _evidence_cooldown_lock:
+            _evidence_last_capture.clear()
+
+
+def _end_evidence_session():
+    """Stop retaining pre-roll frames while preserving report/API evidence."""
+    global _evidence_detection_epoch
+    _clear_evidence_frame_buffer()
+    with _evidence_lifecycle_lock:
+        _evidence_detection_epoch += 1
+
+
+def _evidence_timecode(trigger_timestamp):
+    """Return the elapsed session time at a wall-clock capture timestamp."""
+    elapsed = accumulated_elapsed_seconds
+    started_at = session_start_time
+    if started_at is not None:
+        elapsed += max(0, int(trigger_timestamp - started_at.timestamp()))
+    elapsed = max(0, int(elapsed))
+    return elapsed, f"{elapsed // 3600:02d}:{(elapsed // 60) % 60:02d}:{elapsed % 60:02d}"
+
+
+def _evidence_candidate_context():
+    """Best available candidate attribution at the instant of a room event."""
+    for student_id, data in tracked_students.items():
+        if data.get("status") != "Away":
+            return str(data.get("name") or student_id), str(student_id)
+    return "Unattributed candidate", "N/A"
+
+
+def _sample_evidence_frames(frame_pairs, earliest_timestamp):
+    """Downsample buffered raw frames to the output FPS while retaining order."""
+    interval = 1.0 / max(EVIDENCE_FPS, 1.0)
+    sampled = []
+    last_timestamp = None
+    for frame_timestamp, frame in frame_pairs:
+        if frame is None or frame_timestamp < earliest_timestamp:
+            continue
+        if last_timestamp is None or frame_timestamp - last_timestamp >= interval:
+            sampled.append((frame_timestamp, frame))
+            last_timestamp = frame_timestamp
+    return sampled
+
+
+def _update_evidence_clip(clip_id, generation, **updates):
+    """Safely mutate an in-session clip only if it still belongs to it."""
+    with _evidence_lifecycle_lock:
+        if generation != _evidence_session_generation:
+            return False
+    with _evidence_clips_lock:
+        for clip in session_evidence_clips:
+            if clip.get("id") == clip_id:
+                clip.update(updates)
+                return True
+    return False
+
+
+def _encode_evidence_frames_h264(frames, output_path, fps=10.0, resolution=(640, 480)):
+    """Encode frames to browser-playable H.264 MP4 with yuv420p and faststart."""
+    import subprocess
+    fps_val = max(float(fps), 1.0)
+    w, h = resolution
+    temporary_path = output_path + ".part.mp4"
+
+    ffmpeg_exe = None
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        import shutil
+        ffmpeg_exe = shutil.which("ffmpeg")
+
+    if ffmpeg_exe and os.path.exists(ffmpeg_exe):
+        try:
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-f", "rawvideo",
+                "-vcodec", "rawvideo",
+                "-s", f"{w}x{h}",
+                "-pix_fmt", "bgr24",
+                "-r", str(fps_val),
+                "-i", "-",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-movflags", "+faststart",
+                temporary_path
+            ]
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            written = 0
+            for _ts, raw_frame in frames:
+                ef = _prepare_evidence_frame(raw_frame)
+                if ef is None:
+                    continue
+                proc.stdin.write(ef.tobytes())
+                written += 1
+            proc.stdin.close()
+            proc.wait()
+            if proc.returncode == 0 and os.path.exists(temporary_path) and os.path.getsize(temporary_path) > 0:
+                os.replace(temporary_path, output_path)
+                return written
+        except Exception as e:
+            print(f"[EVIDENCE] ffmpeg encode failed, falling back to cv2: {e}")
+
+    # Fallback to OpenCV VideoWriter
+    writer = cv2.VideoWriter(
+        temporary_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps_val,
+        resolution
+    )
+    written = 0
+    try:
+        for _ts, raw_frame in frames:
+            ef = _prepare_evidence_frame(raw_frame)
+            if ef is None:
+                continue
+            writer.write(ef)
+            written += 1
+    finally:
+        writer.release()
+
+    if written > 0 and os.path.exists(temporary_path):
+        os.replace(temporary_path, output_path)
+    return written
+
+
+def _prepare_evidence_frame(frame):
+    """Normalize camera frames for a consistent, locally playable MP4."""
+    if frame is None:
+        return None
+    if len(frame.shape) == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    elif len(frame.shape) == 3 and frame.shape[2] == 4:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    if len(frame.shape) != 3 or frame.shape[2] != 3:
+        return None
+    return cv2.resize(frame, EVIDENCE_RESOLUTION, interpolation=cv2.INTER_AREA)
+
+
+def capture_evidence_clip(event_type, trigger_timestamp=None,
+                          candidate_name=None, candidate_id=None):
+    """Start a non-blocking, pre/post-roll evidence recording for a device event.
+
+    Only the four explicitly whitelisted prohibited devices/materials can enter
+    this path.  In particular, identity and behavior alerts cannot accidentally
+    create forensic videos by calling this helper.
+    """
+    if event_type not in _EVIDENCE_EVENT_DETAILS or not SESSION_ACTIVE:
+        return None
+
+    trigger_timestamp = float(trigger_timestamp or time.time())
+    with _evidence_lifecycle_lock:
+        if not SESSION_ACTIVE:
+            return None
+        generation = _evidence_session_generation
+
+    with _evidence_cooldown_lock:
+        last_capture = _evidence_last_capture.get(event_type, 0.0)
+        if trigger_timestamp - last_capture < EVIDENCE_COOLDOWN:
+            return None
+        _evidence_last_capture[event_type] = trigger_timestamp
+
+    if not candidate_name or not candidate_id:
+        candidate_name, candidate_id = _evidence_candidate_context()
+    candidate_name = str(candidate_name)
+    candidate_id = str(candidate_id)
+    event_details = _EVIDENCE_EVENT_DETAILS[event_type]
+    capture_time = datetime.fromtimestamp(trigger_timestamp)
+    session_date = capture_time.strftime("%Y-%m-%d")
+    file_stamp = capture_time.strftime("%Y%m%d_%H%M%S")
+    clip_id = f"ev_{int(trigger_timestamp * 1000)}_{uuid.uuid4().hex[:8]}"
+    filename = f"ev_{file_stamp}_{event_type}_{clip_id[-8:]}.mp4"
+    output_dir = os.path.join(EVIDENCE_DIR, session_date)
+    output_path = os.path.abspath(os.path.join(output_dir, filename))
+    session_seconds, session_timecode = _evidence_timecode(trigger_timestamp)
+    clock_time = capture_time.strftime("%I:%M:%S %p").lstrip("0")
+    clip = {
+        "id": clip_id,
+        "type": event_type,
+        "title": event_details["title"],
+        "description": event_details["description"],
+        "severity": "CRITICAL",
+        "timestamp_str": capture_time.strftime("%H:%M:%S"),
+        "clock_time": clock_time,
+        "session_timecode": session_timecode,
+        "session_seconds": session_seconds,
+        "trigger_timestamp": trigger_timestamp,
+        "candidate_name": candidate_name,
+        "candidate_id": candidate_id,
+        "filename": filename,
+        "file_path": output_path,
+        "file_url": f"/evidence/{session_date}/{filename}",
+        "duration_seconds": int(round(PRE_ROLL_SECONDS + POST_ROLL_SECONDS)),
+        "status": "recording",
+    }
+
+    # Take the pre-roll snapshot before starting the worker.  Frame entries are
+    # immutable copies owned by the circular buffer, so copying the deque is
+    # sufficient and avoids an expensive second image copy on the AI thread.
+    with _evidence_buffer_lock:
+        pre_roll_snapshot = list(_evidence_frame_buffer)
+
+    with _evidence_lifecycle_lock:
+        if generation != _evidence_session_generation or not SESSION_ACTIVE:
+            return None
+        with _evidence_clips_lock:
+            session_evidence_clips.append(clip)
+
+    def _write_evidence_clip():
+        try:
+            frames = _sample_evidence_frames(
+                pre_roll_snapshot, trigger_timestamp - PRE_ROLL_SECONDS
+            )
+            last_source_timestamp = max(
+                (frame_timestamp for frame_timestamp, _ in pre_roll_snapshot),
+                default=trigger_timestamp,
+            )
+            last_output_timestamp = frames[-1][0] if frames else None
+            output_interval = 1.0 / max(EVIDENCE_FPS, 1.0)
+            deadline = trigger_timestamp + POST_ROLL_SECONDS
+
+            # Polling the latest frame is deliberately isolated here; it does
+            # not wait on or clear the event consumed by the camera/stream loops.
+            while time.time() < deadline:
+                with _evidence_lifecycle_lock:
+                    if generation != _evidence_session_generation:
+                        return
+                with _raw_lock:
+                    latest_frame = _latest_raw_frame
+                    latest_timestamp = _latest_raw_ts
+                    frame_copy = latest_frame.copy() if latest_frame is not None else None
+
+                if (frame_copy is not None and latest_timestamp > last_source_timestamp
+                        and latest_timestamp >= trigger_timestamp
+                        and (last_output_timestamp is None
+                             or latest_timestamp - last_output_timestamp >= output_interval)):
+                    frames.append((latest_timestamp, frame_copy))
+                    last_output_timestamp = latest_timestamp
+                if latest_timestamp > last_source_timestamp:
+                    last_source_timestamp = latest_timestamp
+                time.sleep(0.01)
+
+            if not frames:
+                _update_evidence_clip(
+                    clip_id, generation, status="failed",
+                    error="No camera frames were available for this evidence clip.",
+                )
+                return
+
+            os.makedirs(output_dir, exist_ok=True)
+            written_frames = _encode_evidence_frames_h264(frames, output_path, EVIDENCE_FPS, EVIDENCE_RESOLUTION)
+
+            if written_frames == 0:
+                _update_evidence_clip(
+                    clip_id, generation, status="failed",
+                    error="No usable camera frames were available for this evidence clip.",
+                )
+                return
+
+            _update_evidence_clip(
+                clip_id,
+                generation,
+                status="ready",
+                duration_seconds=round(written_frames / max(EVIDENCE_FPS, 1.0), 1),
+            )
+        except Exception as exc:
+            print(f"[EVIDENCE] clip capture failed ({event_type}): {exc}")
+            _update_evidence_clip(
+                clip_id, generation, status="failed", error=str(exc),
+            )
+
+    threading.Thread(
+        target=_write_evidence_clip,
+        name=f"evidence-{event_type.lower()}",
+        daemon=True,
+    ).start()
+    return dict(clip)
+
+
 _ai_overlay_lock = threading.Lock()
 _shared_draw_ops = []
 
@@ -3335,15 +3757,8 @@ _frame_ready = threading.Condition()
 _worker_lock = threading.Lock()
 _worker_started = False
 
-# Watchdog: last time the AI detection loop completed an iteration. 0 = not yet
-# started. /api/status reports its age so the UI can flag a stalled pipeline
-# instead of silently trusting stale roster/alert state -- the core fix for the
-# "frozen UI while the feed keeps playing" regression.
 _ai_heartbeat_ts = 0.0
-# A completed AI iteration older than this flags the pipeline as stalled. Set
-# above the occasional inference-contention spike (~2s) so a single slow frame
-# doesn't flap the "reconnecting" indicator; a genuine stall stays flagged.
-DETECTION_STALE_SECONDS = float(os.environ.get("DETECTION_STALE_SECONDS", "3.5"))
+DETECTION_STALE_SECONDS = float(os.environ.get("DETECTION_STALE_SECONDS", "8.0"))
 
 _viewers = 0
 _viewers_lock = threading.Lock()
@@ -3367,9 +3782,9 @@ def _publish_frame(jpeg_bytes):
 
 
 def _camera_wanted():
-    """True only while a viewer is watching and enrollment has not paused us."""
+    """True while a viewer is watching or an exam session is running, provided enrollment has not paused us."""
     with _viewers_lock:
-        return _viewers > 0 and not _camera_paused
+        return (_viewers > 0 or SESSION_ACTIVE) and not _camera_paused
 
 
 def _camera_capture_worker():
@@ -3438,6 +3853,12 @@ def _camera_capture_worker():
         with _raw_lock:
             _latest_raw_frame = frame
             _latest_raw_ts = now
+        if SESSION_ACTIVE:
+            # The evidence buffer owns a copy and uses its own lock so neither
+            # preview composition nor inference blocks camera acquisition.
+            evidence_frame = frame.copy()
+            with _evidence_buffer_lock:
+                _evidence_frame_buffer.append((now, evidence_frame))
         _raw_frame_event.set()
         _phone_frame_event.set()
 
@@ -3984,6 +4405,13 @@ def _ai_worker_loop():
     global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops, _phone_person_boxes, _last_phone_detection_ts
     last_ai_ts = 0.0
     last_log_time = 0.0
+    previous_evidence_flags = {
+        "phone_detected": False,
+        "smartwatch_detected": False,
+        "earbud_detected": False,
+        "book_detected": False,
+    }
+    observed_evidence_epoch = _evidence_detection_epoch
 
     while True:
         with _raw_lock:
@@ -4029,6 +4457,7 @@ def _ai_worker_loop():
         phone_boxes = []
         smartwatch_boxes = []
         earbud_boxes = []
+        book_boxes = []
 
         for d in phone_hits:
             px1, py1, px2, py2 = [int(v) for v in d["bbox"]]
@@ -4036,10 +4465,42 @@ def _ai_worker_loop():
             dev_type = d.get("device_type", "phone")
             if dev_type == "smartwatch":
                 smartwatch_boxes.append((px1, py1, px2, py2, pconf))
+                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 140, 255), 2,
+                                 "SMARTWATCH DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
             elif dev_type == "earbud":
                 earbud_boxes.append((px1, py1, px2, py2, pconf))
+                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 165, 255), 2,
+                                 "EARBUD DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
+            elif dev_type == "book":
+                book_boxes.append((px1, py1, px2, py2, pconf))
+                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 0, 255), 2,
+                                 "PROHIBITED BOOK / NOTES", f"UNAUTHORIZED MATERIAL · {pconf:.0%}"))
             else:
                 phone_boxes.append((px1, py1, px2, py2, pconf))
+                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 0, 255), 2,
+                                 "CELL PHONE DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
+
+        # Evidence creation is edge-triggered and intentionally limited to
+        # prohibited devices/materials. Unknown people and behavioral alerts
+        # are never passed to the capture helper.
+        if observed_evidence_epoch != _evidence_detection_epoch:
+            previous_evidence_flags = {key: False for key in previous_evidence_flags}
+            observed_evidence_epoch = _evidence_detection_epoch
+        evidence_event_types = {
+            "phone_detected": "PHONE_DETECTED",
+            "smartwatch_detected": "SMARTWATCH_DETECTED",
+            "earbud_detected": "EARBUD_DETECTED",
+            "book_detected": "PROHIBITED_MATERIAL",
+        }
+        if SESSION_ACTIVE:
+            for flag, event_type in evidence_event_types.items():
+                detected = bool(room_state.get(flag, False))
+                if detected and not previous_evidence_flags[flag]:
+                    capture_evidence_clip(event_type, now)
+                previous_evidence_flags[flag] = detected
+        else:
+            for flag in previous_evidence_flags:
+                previous_evidence_flags[flag] = bool(room_state.get(flag, False))
 
         # 3. MediaPipe FaceLandmarker analysis (all visible faces with real iris & head pose)
         face_obs_list = face_analyzer.analyze(frame)
@@ -4114,6 +4575,21 @@ def _ai_worker_loop():
             face_state = _st["state"]
             if face_state != "known" and _st["unknown_dur"] > unknown_max_dur:
                 unknown_max_dur = _st["unknown_dur"]
+
+            # Track-stability diagnostics (TRACK_DEBUG=1): print the stabiliser
+            # track_id alongside the overlay state that will be rendered for it,
+            # every frame. This makes it directly visible whether a reset of the
+            # on-video tag coincides with the track_id CHANGING (tracker
+            # dropping/recreating the track) or the track_id staying constant
+            # while the overlay state flips anyway (a UI-state-only reset).
+            if TRACK_DEBUG:
+                _overlay = ("confirmed" if face_state == "known"
+                            else "identifying" if face_state == "pending"
+                            else "unknown")
+                print(f"[TRACKDBG] track_id={_st['tid']} "
+                      f"displayed_overlay_state={_overlay} "
+                      f"sid={sid} raw_state={face_state} "
+                      f"unknown_dur={_st['unknown_dur']:.2f}", flush=True)
 
             # Smooth face bounding box
             pad_x, pad_y = int(bw * 0.08), int(bh * 0.10)
@@ -4323,6 +4799,12 @@ def _ai_worker_loop():
             status = "CAMERA BLOCKED"
         elif room_state["phone_detected"]:
             status = "PHONE DETECTED"
+        elif room_state["book_detected"]:
+            status = "PROHIBITED MATERIAL"
+        elif room_state["smartwatch_detected"]:
+            status = "SMARTWATCH DETECTED"
+        elif room_state["earbud_detected"]:
+            status = "EARBUD DETECTED"
         elif room_events["extra_person"] or unknown_count > 0:
             status = "UNKNOWN PERSON"
         room_state["status"] = status
@@ -4471,8 +4953,7 @@ def api_status():
         "unknown_seconds": room_state.get("unknown_seconds", 0.0),
         # Watchdog: how long since the detection loop last produced a result, so
         # the UI can show "reconnecting" instead of trusting stale state.
-        "detection_healthy": (_ai_heartbeat_ts > 0 and
-                              (time.time() - _ai_heartbeat_ts) < DETECTION_STALE_SECONDS),
+        "detection_healthy": ((_ai_heartbeat_ts > 0 and (time.time() - _ai_heartbeat_ts) < DETECTION_STALE_SECONDS) if (_viewers > 0 or SESSION_ACTIVE) else True),
         "detection_age_ms": int((time.time() - _ai_heartbeat_ts) * 1000) if _ai_heartbeat_ts > 0 else -1,
         "phone_detected": room_state.get("phone_detected", False),
         "smartwatch_detected": room_state.get("smartwatch_detected", False),

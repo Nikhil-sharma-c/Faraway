@@ -59,6 +59,7 @@ htmlcov/
 # Project specific transient artifacts
 frontend/legacy/static/reports/
 backend/reports/
+backend/evidence/
 snapshot_tmp.json
 snapshot.json
 
