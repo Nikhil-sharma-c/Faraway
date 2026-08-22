@@ -3019,7 +3019,7 @@ async function fetchLiveStatus() {
                 if (!prevAlerts.includes('book')) prevAlerts.push('book');
             }
         } else if (bookActiveAlert) {
-            if (now - bookLastSeenTs >= 1500) {
+            if (now - bookLastSeenTs >= 600) {
                 bookActiveAlert = false;
                 addAlert('Prohibited material removed from frame.', 'success');
                 logActivity('Material removed');

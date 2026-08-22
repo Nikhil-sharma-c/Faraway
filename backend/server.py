@@ -3288,16 +3288,15 @@ def _phone_worker():
 
             room_state["smartwatch_detected"] = has_watch
             room_state["earbud_detected"] = has_earbud
-            if has_book:
-                room_state["book_detected"] = True
+            room_state["book_detected"] = has_book
 
         except Exception as e:
             print(f"[PHONE] detection pass failed: {e}")
 
         # Minimal yield to keep CPU healthy while maintaining ultra-fast loop
         elapsed = time.time() - t_start
-        if elapsed < 0.02:
-            time.sleep(0.02 - elapsed)
+        if elapsed < 0.005:
+            time.sleep(0.005 - elapsed)
 
 
 def start_phone_worker():
@@ -3998,19 +3997,12 @@ def _ai_worker_loop():
         now = time.time()
         draw_ops = []
 
-        # 1. YOLO person + FAST phone detection in ONE shared inference.
-        # Adding the phone class (COCO 67) to the person pass yields a phone
-        # detection on EVERY AI frame at ~no extra cost -- the "fast pass" that
-        # flags a clearly-visible phone within ~one frame (~100ms) instead of
-        # waiting for the heavy high-recall phone worker's next cycle. The slow
-        # worker (yolo26s, rate-governed) still adds recall for small/partial/
-        # occluded devices; the two are merged below.
+        # 1. YOLO person detection for proctoring candidate spatial bounds.
         _t_yolo = time.time()
         yolo_results = yolo_model(frame, stream=True, verbose=False,
-                                  imgsz=YOLO_IMGSZ, classes=[0, 67])
+                                  imgsz=YOLO_IMGSZ, classes=[0])
         person_detections = []
         person_boxes = []
-        fast_phone_raw = []
 
         for r in yolo_results:
             for box in r.boxes:
@@ -4022,33 +4014,15 @@ def _ai_worker_loop():
                         continue
                     person_detections.append(([x1, y1, x2 - x1, y2 - y1], conf, "person"))
                     person_boxes.append((x1, y1, x2, y2))
-                elif cls == 67 and conf >= PHONE_FAST_CONF:
-                    fast_phone_raw.append((x1, y1, x2, y2, conf))
         if RECOG_DEBUG:
-            print(f"[PERF] fast YOLO(person+phone)@{YOLO_IMGSZ} "
-                  f"{(time.time() - _t_yolo) * 1000:.0f}ms persons={len(person_boxes)} "
-                  f"fast_phones={len(fast_phone_raw)}")
+            print(f"[PERF] fast YOLO(person)@{YOLO_IMGSZ} "
+                  f"{(time.time() - _t_yolo) * 1000:.0f}ms persons={len(person_boxes)}")
 
-        # 2. Phone / Device detection = FAST pass (this frame) + SLOW high-recall
-        # worker pass, merged. The fast pass makes the box/alert appear within one
-        # AI frame of the phone becoming visible; the worker pulls its own frames
-        # independently (see _phone_worker) so a slow face pass can never delay it.
+        # 2. Read latest phone / device detections directly from the dedicated high-speed YOLO26s worker
         _phone_person_boxes = person_boxes
         with _phone_lock:
             slow_fresh = (now - _phone_output["ts"]) <= PHONE_RESULT_TTL
-            slow_hits = list(_phone_output["boxes"]) if slow_fresh else []
-
-        fast_hits = []
-        for (fx1, fy1, fx2, fy2, fconf) in fast_phone_raw:
-            fast_hits.append({"bbox": (fx1, fy1, fx2, fy2), "conf": fconf,
-                              "class_id": 67, "class_name": "cell phone",
-                              "device_type": "phone", "label": "CELL PHONE DETECTED",
-                              "source": "fast"})
-
-        phone_hits = []
-        for d in sorted(fast_hits + slow_hits, key=lambda x: -x["conf"]):
-            if all(phone_detect._iou(d["bbox"], e["bbox"]) < 0.45 for e in phone_hits):
-                phone_hits.append(d)
+            phone_hits = list(_phone_output["boxes"]) if slow_fresh else []
 
         phone_boxes = []
         smartwatch_boxes = []
@@ -4064,21 +4038,6 @@ def _ai_worker_loop():
                 earbud_boxes.append((px1, py1, px2, py2, pconf))
             else:
                 phone_boxes.append((px1, py1, px2, py2, pconf))
-
-        # Temporal smoothing for stable phone state
-        if len(phone_boxes) > 0:
-            _last_phone_detection_ts = now
-            room_state["phone_detected"] = True
-        else:
-            # Hold detection for 0.35s to prevent flicker on momentary partial occlusions
-            if (now - _last_phone_detection_ts) < 0.35:
-                room_state["phone_detected"] = True
-            else:
-                room_state["phone_detected"] = False
-
-        room_state["smartwatch_detected"] = len(smartwatch_boxes) > 0
-        room_state["earbud_detected"] = len(earbud_boxes) > 0
-        room_state["book_detected"] = False
 
         # 3. MediaPipe FaceLandmarker analysis (all visible faces with real iris & head pose)
         face_obs_list = face_analyzer.analyze(frame)
