@@ -3000,8 +3000,8 @@ async function fetchLiveStatus() {
                 if (!prevAlerts.includes('phone')) prevAlerts.push('phone');
             }
         } else if (phoneActiveAlert) {
-            // Only fire removal alert after 1.5s of confirmed continuous absence
-            if (now - phoneLastSeenTs >= 1500) {
+            // Fire removal alert cleanly after confirmed absence
+            if (now - phoneLastSeenTs >= 600) {
                 phoneActiveAlert = false;
                 addAlert('Prohibited phone removed from frame.', 'success');
                 logActivity('Phone removed from area');

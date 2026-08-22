@@ -3284,11 +3284,7 @@ def _phone_worker():
                 _last_phone_detection_ts = t_done
                 room_state["phone_detected"] = True
             else:
-                # Lightweight stabilization (0.35s) to avoid single-frame flutter without lag
-                if (t_done - _last_phone_detection_ts) < 0.35:
-                    room_state["phone_detected"] = True
-                else:
-                    room_state["phone_detected"] = False
+                room_state["phone_detected"] = False
 
             room_state["smartwatch_detected"] = has_watch
             room_state["earbud_detected"] = has_earbud
@@ -3745,10 +3741,16 @@ _next_dev_id = 1
 
 def _update_device_tracks(direct_boxes, now):
     """Smooth real-time bounding box interpolation for phones & prohibited devices.
-    Runs on every camera frame at 30 FPS. Interpolates bounding boxes seamlessly
-    towards the latest YOLO26s detections with zero lag and zero jumping.
+    Runs on every camera frame at 30 FPS.
+    - When direct_boxes has detections: smoothly tracks and interpolates at 30 FPS.
+    - When direct_boxes is empty (phone removed): IMMEDIATELY clears all tracks and hides the box.
     """
     global _device_tracks, _next_dev_id
+
+    # If latest YOLO result has no device detections, clear all tracks immediately (zero removal delay)
+    if not direct_boxes:
+        _device_tracks.clear()
+        return []
 
     unmatched_dets = []
     matched_track_ids = set()
@@ -3839,17 +3841,15 @@ def _update_device_tracks(direct_boxes, now):
         _next_dev_id += 1
         _device_tracks[tid] = ud
 
+    # Remove any tracks not matched in this detection pass (immediate disappearance)
+    active_new_tids = {f"dev_{_next_dev_id - i}" for i in range(1, len(unmatched_dets) + 1)}
+    for tid in list(_device_tracks.keys()):
+        if tid not in matched_track_ids and tid not in active_new_tids:
+            _device_tracks.pop(tid, None)
+
     # Interpolate and render all active tracks
     rendered = []
-    to_delete = []
-
     for tid, trk in list(_device_tracks.items()):
-        age = now - trk["last_seen"]
-        # If not seen for 0.45s, remove track cleanly
-        if age > 0.45:
-            to_delete.append(tid)
-            continue
-
         curr_box = trk["box"]
         target_box = trk["target_box"]
 
@@ -3873,9 +3873,6 @@ def _update_device_tracks(direct_boxes, now):
             "title": trk["title"],
             "sub": trk["sub"]
         })
-
-    for tid in to_delete:
-        _device_tracks.pop(tid, None)
 
     return rendered
 
@@ -3931,7 +3928,7 @@ def _stream_worker():
 
         # Real-time smooth phone / device tracking (interpolated on every frame at native 30 FPS)
         with _phone_lock:
-            phone_fresh = (now - _phone_output["ts"]) <= 0.6
+            phone_fresh = (now - _phone_output["ts"]) <= 0.45
             direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
 
         smooth_devices = _update_device_tracks(direct_boxes, now)
