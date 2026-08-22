@@ -17,6 +17,8 @@ import numpy as np
 import cv2
 from ultralytics import YOLO
 
+import torch
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 # Strict COCO Class IDs
@@ -41,10 +43,14 @@ CONF_THRESHOLDS = {
 }
 
 DEFAULT_CONF = 0.20
-ROI_IMGSZ = 640              # High-resolution magnification for person/hand crop
+ROI_IMGSZ = 480              # Fast magnification for person/hand crop
 
-# Cap this detector's ONNX Runtime thread pool.
+# Cap this detector's thread pool to prevent CPU oversubscription.
 _ORT_THREADS = max(2, min(4, (os.cpu_count() or 4) // 2)) if (os.cpu_count() or 4) >= 4 else 2
+try:
+    torch.set_num_threads(_ORT_THREADS)
+except Exception:
+    pass
 
 # Minimal COCO name map for the classes we care about (used on the raw-ONNX
 # path, which does not carry ultralytics' full names dict).
@@ -57,14 +63,11 @@ _COCO_NAMES = {62: "tv", 63: "laptop", 65: "remote", 67: "cell phone",
 # and stays responsive; "roundrobin" keeps that bound at 2 while retaining ROI
 # magnification for distant/small phones. Set PHONE_ROI_MODE=none|roundrobin|all.
 # Default "none" = exactly ai-exam-proctor's design (one inference per pass).
-# Measured on a 3-person 1376x768 frame with yolo26s: all=552ms, roundrobin=306ms,
-# none=118ms. Set PHONE_ROI_MODE=roundrobin if distant/small phones need the
-# extra magnification and you can afford ~2x the cycle time.
 DEFAULT_ROI_MODE = os.environ.get("PHONE_ROI_MODE", "none").lower()
 # Stretch the whole frame to a square model input instead of letterboxing,
-# matching ai-exam-proctor's drawImage(video,0,0,640,640).
+# matching ai-exam-proctor's drawImage(video,0,0,480,480).
 SQUARE_STRETCH = os.environ.get("PHONE_SQUARE_STRETCH", "1").lower() not in ("0", "off", "false")
-DEFAULT_WHOLE_IMGSZ = 640    # High-resolution whole-frame scanning
+DEFAULT_WHOLE_IMGSZ = int(os.environ.get("PHONE_IMGSZ", "480"))    # High-speed responsive scanning (50-60ms)
 
 # Asymmetric person ROI padding:
 # Expands generously downwards and sideways to enclose candidate hands, desk, and lap.
@@ -149,6 +152,20 @@ class PhoneDetector:
             self.model = YOLO(path)
             self.sess = None
             self.names = self.model.names if hasattr(self.model, 'names') else {}
+            # Pre-warm model on startup to avoid first-frame latency penalty
+            try:
+                warmup_img = np.zeros((DEFAULT_WHOLE_IMGSZ, DEFAULT_WHOLE_IMGSZ, 3), dtype=np.uint8)
+                with torch.inference_mode():
+                    self.model.predict(
+                        warmup_img,
+                        verbose=False,
+                        imgsz=DEFAULT_WHOLE_IMGSZ,
+                        conf=self.conf,
+                        classes=TARGET_CLASSES,
+                        device='cpu'
+                    )
+            except Exception as w_err:
+                pass
 
     def _detect_onnx(self, img):
         """Thread-capped end2end ONNX inference. Resizes the given image to the
@@ -186,14 +203,15 @@ class PhoneDetector:
             return self._detect_onnx(img)
         out = []
         try:
-            results = self.model.predict(
-                img,
-                verbose=False,
-                imgsz=imgsz,
-                conf=self.conf,
-                classes=TARGET_CLASSES,
-                device='cpu'
-            )
+            with torch.inference_mode():
+                results = self.model.predict(
+                    img,
+                    verbose=False,
+                    imgsz=imgsz,
+                    conf=self.conf,
+                    classes=TARGET_CLASSES,
+                    device='cpu'
+                )
             for r in results:
                 if r.boxes is None or len(r.boxes) == 0:
                     continue

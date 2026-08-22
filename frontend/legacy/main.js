@@ -14,7 +14,7 @@ function init() {
     
     // Check Session Status immediately and then every second
     checkSessionStatus();
-    setInterval(fetchLiveStatus, 1000);
+    setInterval(fetchLiveStatus, 400);
     setInterval(checkSessionStatus, 2000);
 
     const endBtn = document.getElementById('endSessionBtn');

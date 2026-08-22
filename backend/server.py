@@ -423,9 +423,10 @@ session_start_time = None
 session_paused_time = None
 accumulated_elapsed_seconds = 0
 
-# ---------------- REVIEWABLE ACTION TIMELINE (SEARCH & DISCOVERY) ----------------
+import queue as _queue
 timeline_events_buffer = []
 timeline_events_lock = threading.Lock()
+_timeline_db_queue = _queue.Queue(maxsize=2000)
 
 DEFAULT_TIMELINE_SEED = [
     {
@@ -708,34 +709,8 @@ def record_timeline_event(student_id, student_name, institution_id, category, ev
             timeline_events_buffer.pop()
 
     try:
-        conn = connect_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO action_timeline (
-                event_uuid, time_str, student_id, student_name, institution_id,
-                category, event_type, title, description, severity, state_change,
-                metadata, resolved, timestamp
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-        """, (
-            event["id"],
-            event["timestamp"],
-            event["student_id"],
-            event["student_name"],
-            event["institution_id"],
-            event["category"],
-            event["event_type"],
-            event["title"],
-            event["description"],
-            event["severity"],
-            json.dumps(event["state_change"]),
-            json.dumps(event["metadata"]),
-            False,
-            db_timestamp
-        ))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
+        _timeline_db_queue.put_nowait((event, db_timestamp))
+    except Exception:
         pass
 
     return event
@@ -3057,34 +3032,78 @@ def log_to_db(student_id, risk_score, direction, status, institution_id=None):
 
 
 def _db_writer():
-    """Drains the telemetry queue on its own thread."""
+    """Drains the telemetry and timeline queues on a background thread."""
     while True:
-        item = _db_queue.get()
-        now = time.time()
-        if now < _db_state["disabled_until"]:
-            continue  # circuit open -- drop this event
-        sid_val, inst, risk, direction, status = item
         try:
-            conn = connect_db()
+            item = _db_queue.get(timeout=0.1)
+        except _queue.Empty:
+            item = None
+
+        now = time.time()
+        if item is not None and now >= _db_state["disabled_until"]:
+            sid_val, inst, risk, direction, status = item
             try:
-                cur = conn.cursor()
-                cur.execute(
-                    "INSERT INTO exam_logs (student_id, institution_id, risk_score, direction, status)"
-                    " VALUES (%s, %s, %s, %s, %s)",
-                    (sid_val, inst, risk, direction, status))
-                conn.commit()
-                cur.close()
-            finally:
-                conn.close()
-            if not _db_state["ok"]:
-                _db_state["ok"] = True
-                print("[DB] telemetry logging recovered")
-        except Exception as e:
-            if _db_state["ok"] or (now - _db_state["last_err_log"] > 60):
-                print(f"[DB] telemetry logging unavailable ({e}); pausing writes 60s")
-                _db_state["last_err_log"] = now
-            _db_state["ok"] = False
-            _db_state["disabled_until"] = now + 60
+                conn = connect_db()
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "INSERT INTO exam_logs (student_id, institution_id, risk_score, direction, status)"
+                        " VALUES (%s, %s, %s, %s, %s)",
+                        (sid_val, inst, risk, direction, status))
+                    conn.commit()
+                    cur.close()
+                finally:
+                    conn.close()
+                if not _db_state["ok"]:
+                    _db_state["ok"] = True
+                    print("[DB] telemetry logging recovered")
+            except Exception as e:
+                if _db_state["ok"] or (now - _db_state["last_err_log"] > 60):
+                    print(f"[DB] telemetry logging unavailable ({e}); pausing writes 60s")
+                    _db_state["last_err_log"] = now
+                _db_state["ok"] = False
+                _db_state["disabled_until"] = now + 60
+
+        # Drain timeline event queue asynchronously
+        try:
+            t_item = _timeline_db_queue.get_nowait()
+        except _queue.Empty:
+            t_item = None
+
+        if t_item is not None and now >= _db_state["disabled_until"]:
+            event, db_timestamp = t_item
+            try:
+                conn = connect_db()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO action_timeline (
+                            event_uuid, time_str, student_id, student_name, institution_id,
+                            category, event_type, title, description, severity, state_change,
+                            metadata, resolved, timestamp
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """, (
+                        event["id"],
+                        event["timestamp"],
+                        event["student_id"],
+                        event["student_name"],
+                        event["institution_id"],
+                        event["category"],
+                        event["event_type"],
+                        event["title"],
+                        event["description"],
+                        event["severity"],
+                        json.dumps(event["state_change"]),
+                        json.dumps(event["metadata"]),
+                        False,
+                        db_timestamp
+                    ))
+                    conn.commit()
+                    cur.close()
+                finally:
+                    conn.close()
+            except Exception:
+                pass
 
 
 def start_db_writer():
@@ -3191,14 +3210,13 @@ RECOG_DEBUG = os.environ.get("PROCTOR_DEBUG", "0").lower() in ("1", "true", "on"
 # ---- Phone detection thread -------------------------------------------
 YOLO_IMGSZ = 480              # Fast inference size for per-frame person + phone detection
 PHONE_INTERVAL = 0.01         # High-responsiveness continuous phone detection
-PHONE_RESULT_TTL = 0.8        # Smooth TTL bridging worker passes with zero flicker
+PHONE_RESULT_TTL = 0.6        # Fast, responsive TTL bridging worker passes with zero flicker
 PHONE_WHOLE_FRAME_EVERY = 1   # Continuous whole-frame + person-ROI scanning on every pass
-PHONE_MIN_CYCLE = float(os.environ.get("PHONE_MIN_CYCLE", "0.08")) # 10-15 FPS responsive YOLO26s pass
 PHONE_FAST_CONF = 0.20        # High recall for partial and edge phone appearances
 
 _phone_lock = threading.Lock()
 _phone_input = {"frame": None, "persons": []}   # legacy, no longer the feed path
-_phone_output = {"boxes": [], "ts": 0.0}
+_phone_output = {"boxes": [], "ts": 0.0, "frame_ts": 0.0, "latency_ms": 0.0}
 _last_phone_detection_ts = 0.0
 # Latest person boxes from the AI loop. The phone worker reads this to aim its
 # round-robin ROI crop, but never waits on it -- it pulls frames itself so the
@@ -3208,50 +3226,80 @@ _phone_thread_started = False
 
 
 def _phone_worker():
-    """Object-detection loop, INDEPENDENT of the face/AI pipeline.
+    """Ultra-low latency YOLO26s object-detection worker, INDEPENDENT of the face/AI pipeline.
 
-    Pulls latest raw camera frames directly without queuing or backlog.
-    Runs high-recall YOLO26s inference with bounded cycle time for ultra-low latency.
+    Pulls latest raw camera frames directly without queuing or stale backlog.
+    Runs high-recall YOLO26s inference with latest-frame strategy for sub-second latency.
     """
-    last_ts = 0.0
+    global _last_phone_detection_ts
+    last_frame_ts = 0.0
     roi_index = 0
     while True:
         if phone_detector is None:
             time.sleep(0.5)
             continue
 
-        cycle_start = time.time()
+        # Wakes up immediately when a new camera frame arrives
+        _raw_frame_event.wait(timeout=0.03)
 
         with _raw_lock:
             frame = _latest_raw_frame
             ts = _latest_raw_ts
-        if frame is None or ts <= last_ts:
-            time.sleep(0.01)
-            continue
-        last_ts = ts
-        frame = frame.copy()
 
+        # Latest frame only: discard stale frames and process newest available frame
+        if frame is None or ts <= last_frame_ts:
+            time.sleep(0.005)
+            continue
+
+        last_frame_ts = ts
         persons = list(_phone_person_boxes)
+        t_start = time.time()
 
         try:
-            _t_slow = time.time()
             found = phone_detector.detect(frame, persons, whole_frame=True,
-                                          whole_imgsz=640, roi_index=roi_index)
+                                          whole_imgsz=phone_detect.DEFAULT_WHOLE_IMGSZ, roi_index=roi_index)
             roi_index += 1
+            t_done = time.time()
+            latency_ms = (t_done - ts) * 1000.0
+
             if RECOG_DEBUG:
-                print(f"[PERF] phone pass {(time.time() - _t_slow) * 1000:.0f}ms "
-                      f"(mode={phone_detect.DEFAULT_ROI_MODE}, persons={len(persons)}) "
-                      f"hits={len(found)}")
+                print(f"[PERF] YOLO26s phone pass {(t_done - t_start) * 1000:.1f}ms "
+                      f"(latency={latency_ms:.1f}ms) hits={len(found)}")
+
             with _phone_lock:
                 _phone_output["boxes"] = found
-                _phone_output["ts"] = time.time()
+                _phone_output["ts"] = t_done
+                _phone_output["frame_ts"] = ts
+                _phone_output["latency_ms"] = latency_ms
+
+            # Immediate room state update for phone and device alerts
+            has_phone = any(d.get("device_type", "phone") == "phone" for d in found)
+            has_watch = any(d.get("device_type") == "smartwatch" for d in found)
+            has_earbud = any(d.get("device_type") == "earbud" for d in found)
+            has_book = any(d.get("device_type") == "book" for d in found)
+
+            if has_phone:
+                _last_phone_detection_ts = t_done
+                room_state["phone_detected"] = True
+            else:
+                # Lightweight stabilization (0.35s) to avoid single-frame flutter without lag
+                if (t_done - _last_phone_detection_ts) < 0.35:
+                    room_state["phone_detected"] = True
+                else:
+                    room_state["phone_detected"] = False
+
+            room_state["smartwatch_detected"] = has_watch
+            room_state["earbud_detected"] = has_earbud
+            if has_book:
+                room_state["book_detected"] = True
+
         except Exception as e:
             print(f"[PHONE] detection pass failed: {e}")
 
-        # Rate-capped cycle to yield CPU
-        elapsed = time.time() - cycle_start
-        if elapsed < PHONE_MIN_CYCLE:
-            time.sleep(PHONE_MIN_CYCLE - elapsed)
+        # Minimal yield to keep CPU healthy while maintaining ultra-fast loop
+        elapsed = time.time() - t_start
+        if elapsed < 0.02:
+            time.sleep(0.02 - elapsed)
 
 
 def start_phone_worker():
@@ -3739,7 +3787,7 @@ def _stream_worker():
 
         # Immediate low-latency phone/device rendering directly from phone worker
         with _phone_lock:
-            phone_fresh = (now - _phone_output["ts"]) <= 0.8
+            phone_fresh = (now - _phone_output["ts"]) <= 0.6
             direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
 
         for d in direct_boxes:
@@ -3758,6 +3806,22 @@ def _stream_worker():
                 _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 165, 255),
                                 thickness=2, title="EARBUD DETECTED",
                                 subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+            elif dev_type == "laptop":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 120, 255),
+                                thickness=2, title="LAPTOP DETECTED",
+                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+            elif dev_type == "book":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 100, 255),
+                                thickness=2, title="UNAUTHORIZED NOTES DETECTED",
+                                subtitle=f"PROHIBITED ITEM · {pconf:.0%}")
+            elif dev_type == "tablet":
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 120, 255),
+                                thickness=2, title="TABLET / SCREEN DETECTED",
+                                subtitle=f"PROHIBITED DEVICE · {pconf:.0%}")
+            else:
+                _render_hud_box(annotated, (px1, py1), (px2, py2), (0, 0, 255),
+                                thickness=2, title="PROHIBITED DEVICE DETECTED",
+                                subtitle=f"SECURITY ALERT · {pconf:.0%}")
 
         # Tracked face boxes + eye markers, drawn at the native frame rate
         for tf in tracked_faces:
@@ -3881,24 +3945,18 @@ def _ai_worker_loop():
             dev_type = d.get("device_type", "phone")
             if dev_type == "smartwatch":
                 smartwatch_boxes.append((px1, py1, px2, py2, pconf))
-                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 140, 255), 2,
-                                 "SMARTWATCH DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
             elif dev_type == "earbud":
                 earbud_boxes.append((px1, py1, px2, py2, pconf))
-                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 165, 255), 2,
-                                 "EARBUD DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
             else:
                 phone_boxes.append((px1, py1, px2, py2, pconf))
-                draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 0, 255), 2,
-                                 "CELL PHONE DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
 
         # Temporal smoothing for stable phone state
         if len(phone_boxes) > 0:
             _last_phone_detection_ts = now
             room_state["phone_detected"] = True
         else:
-            # Hold detection for 0.45s to prevent flicker on momentary partial occlusions
-            if (now - _last_phone_detection_ts) < 0.45:
+            # Hold detection for 0.35s to prevent flicker on momentary partial occlusions
+            if (now - _last_phone_detection_ts) < 0.35:
                 room_state["phone_detected"] = True
             else:
                 room_state["phone_detected"] = False
