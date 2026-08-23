@@ -1,6 +1,9 @@
 import os
 import sqlite3
 import json
+import socket
+import urllib.parse
+
 try:
     import psycopg2
 except ImportError:
@@ -12,7 +15,6 @@ except ImportError:
     def generate_password_hash(pwd):
         import hashlib
         return f"pbkdf2:sha256:600000${hashlib.sha256(pwd.encode()).hexdigest()}"
-
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 SQLITE_DB_PATH = os.path.join(PROJECT_ROOT, "backend", "proctorai_local.db")
 
@@ -233,8 +235,6 @@ def _seed_sqlite(conn):
         print(f"[DB] Error seeding SQLite database: {e}")
 
 
-import socket
-import urllib.parse
 
 _postgres_available = None
 

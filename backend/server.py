@@ -11,7 +11,7 @@ import uuid
 import collections
 import numpy as np
 import psycopg2
-from flask import Flask, Response, jsonify, send_from_directory, request, session, redirect
+from flask import Flask, Response, jsonify, send_from_directory, request, session, redirect, stream_with_context
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
@@ -218,6 +218,8 @@ def record_audit_event(user_id, username, role, institution_id, action, ip_addre
 # ---------------- SECURITY HEADERS MIDDLEWARE ----------------
 @app.after_request
 def set_security_headers(response):
+    if request.path.startswith('/video_feed'):
+        return response
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
@@ -3451,7 +3453,12 @@ def start_phone_worker():
 
 
 def open_capture(source):
-    cap = cv2.VideoCapture(source)
+    if isinstance(source, int) and os.name == 'nt':
+        cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(source)
+    else:
+        cap = cv2.VideoCapture(source)
     try:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
@@ -3935,7 +3942,7 @@ _ai_overlay_lock = threading.Lock()
 _shared_draw_ops = []
 
 _latest_jpeg = None
-_frame_ready = threading.Condition()
+_jpeg_lock = threading.Lock()
 _worker_lock = threading.Lock()
 _worker_started = False
 
@@ -3958,15 +3965,14 @@ def _camera_held():
 
 def _publish_frame(jpeg_bytes):
     global _latest_jpeg
-    with _frame_ready:
+    with _jpeg_lock:
         _latest_jpeg = jpeg_bytes
-        _frame_ready.notify_all()
 
 
 def _camera_wanted():
-    """True while a viewer is watching or an exam session is running, provided enrollment has not paused us."""
+    """True unless enrollment has paused us."""
     with _viewers_lock:
-        return (_viewers > 0 or SESSION_ACTIVE) and not _camera_paused
+        return not _camera_paused
 
 
 def _camera_capture_worker():
@@ -4012,6 +4018,9 @@ def _camera_capture_worker():
             cap = open_capture(source)
             read_failures = 0
             if not cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                cap = None
                 _camera_open = False
                 time.sleep(0.5)
                 continue
@@ -4482,74 +4491,79 @@ def _stream_worker():
     prev_gray = None
 
     while True:
-        _raw_frame_event.wait(timeout=0.1)
-        _raw_frame_event.clear()
-
-        with _raw_lock:
-            frame = _latest_raw_frame
-            ts = _latest_raw_ts
-
-        if frame is None or ts <= last_processed_ts:
-            continue
-
-        last_processed_ts = ts
-        now = time.time()
-        annotated = frame.copy()
-
-        # Per-frame optical-flow face tracking (independent of detection cadence)
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            tracked_faces = _update_face_tracks(prev_gray, gray, now)
-            prev_gray = gray
-        except Exception as exc:
-            print(f"[TRACK] per-frame tracker error: {type(exc).__name__}: {exc}")
-            tracked_faces = []
+            _raw_frame_event.wait(timeout=0.1)
+            _raw_frame_event.clear()
 
-        # Static overlays from the detection loop (face landmarks, gaze, etc.)
-        with _ai_overlay_lock:
-            current_ops = list(_shared_draw_ops)
+            with _raw_lock:
+                frame = _latest_raw_frame
+                ts = _latest_raw_ts
 
-        for op in current_ops:
-            op_type = op[0]
-            if op_type == 'hud_box':
-                _, p1, p2, color, thick, title, sub = op
-                _render_hud_box(annotated, p1, p2, color, thickness=thick,
-                                title=title, subtitle=sub)
-            elif op_type == 'iris':
-                _, center, rad, color = op
-                _render_iris_marker(annotated, center, radius=rad, color=color)
-            elif op_type == 'gaze_arrow':
-                _, start, end, color = op
-                _render_gaze_arrow(annotated, start, end, color=color)
+            if frame is None or ts <= last_processed_ts:
+                time.sleep(0.01)
+                continue
 
-        # Real-time smooth phone / device tracking (interpolated on every frame at native 30 FPS)
-        with _phone_lock:
-            phone_fresh = (now - _phone_output["ts"]) <= 0.45
-            direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
+            last_processed_ts = ts
+            now = time.time()
+            annotated = frame.copy()
 
-        smooth_devices = _update_device_tracks(direct_boxes, now)
-        for sdev in smooth_devices:
-            px1, py1, px2, py2 = sdev["box"]
-            _render_hud_box(annotated, (px1, py1), (px2, py2), sdev["color"],
-                            thickness=2, title=sdev["title"],
-                            subtitle=sdev["sub"])
+            # Per-frame optical-flow face tracking (independent of detection cadence)
+            try:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                tracked_faces = _update_face_tracks(prev_gray, gray, now)
+                prev_gray = gray
+            except Exception as exc:
+                print(f"[TRACK] per-frame tracker error: {type(exc).__name__}: {exc}")
+                tracked_faces = []
 
-        # Tracked face boxes + eye markers, drawn at the native frame rate
-        for tf in tracked_faces:
-            x1, y1, x2, y2 = tf["box"]
-            _render_hud_box(annotated, (x1, y1), (x2, y2), tf["color"],
-                            thickness=2, title=tf["title"], subtitle=tf["sub"])
-            for (ix, iy) in tf["iris"]:
-                _render_iris_marker(annotated, (ix, iy), radius=2, color=(255, 220, 0))
-            for (gp1, gp2) in tf["gaze"]:
-                _render_gaze_arrow(annotated, gp1, gp2, color=(255, 220, 0))
+            # Static overlays from the detection loop (face landmarks, gaze, etc.)
+            with _ai_overlay_lock:
+                current_ops = list(_shared_draw_ops)
 
-        # Fast single-pass JPEG encoding for fluid 30 FPS webcam stream
-        ret, buffer = cv2.imencode('.jpg', annotated, [
-            int(cv2.IMWRITE_JPEG_QUALITY), 78
-        ])
-        if ret:
-            _publish_frame(buffer.tobytes())
+            for op in current_ops:
+                op_type = op[0]
+                if op_type == 'hud_box':
+                    _, p1, p2, color, thick, title, sub = op
+                    _render_hud_box(annotated, p1, p2, color, thickness=thick,
+                                    title=title, subtitle=sub)
+                elif op_type == 'iris':
+                    _, center, rad, color = op
+                    _render_iris_marker(annotated, center, radius=rad, color=color)
+                elif op_type == 'gaze_arrow':
+                    _, start, end, color = op
+                    _render_gaze_arrow(annotated, start, end, color=color)
+
+            # Real-time smooth phone / device tracking (interpolated on every frame at native 30 FPS)
+            with _phone_lock:
+                phone_fresh = (now - _phone_output["ts"]) <= 0.45
+                direct_boxes = list(_phone_output["boxes"]) if phone_fresh else []
+
+            smooth_devices = _update_device_tracks(direct_boxes, now)
+            for sdev in smooth_devices:
+                px1, py1, px2, py2 = sdev["box"]
+                _render_hud_box(annotated, (px1, py1), (px2, py2), sdev["color"],
+                                thickness=2, title=sdev["title"],
+                                subtitle=sdev["sub"])
+
+            # Tracked face boxes + eye markers, drawn at the native frame rate
+            for tf in tracked_faces:
+                x1, y1, x2, y2 = tf["box"]
+                _render_hud_box(annotated, (x1, y1), (x2, y2), tf["color"],
+                                thickness=2, title=tf["title"], subtitle=tf["sub"])
+                for (ix, iy) in tf["iris"]:
+                    _render_iris_marker(annotated, (ix, iy), radius=2, color=(255, 220, 0))
+                for (gp1, gp2) in tf["gaze"]:
+                    _render_gaze_arrow(annotated, gp1, gp2, color=(255, 220, 0))
+
+            # Fast single-pass JPEG encoding for fluid 30 FPS webcam stream
+            ret, buffer = cv2.imencode('.jpg', annotated, [
+                int(cv2.IMWRITE_JPEG_QUALITY), 78
+            ])
+            if ret:
+                _publish_frame(buffer.tobytes())
+        except Exception as str_err:
+            print(f"[STREAM] Compositor error: {str_err}")
+            time.sleep(0.03)
 
 
 def _ai_worker():
@@ -5034,27 +5048,34 @@ def gen_frames():
     forwards the latest frame the worker produced, so extra viewers are
     nearly free and never contend for the camera. Registering as a viewer is
     what tells the worker to acquire the camera."""
-    global _viewers
-    start_camera_worker()
+    global _viewers, _camera_paused
     with _viewers_lock:
+        _camera_paused = False
         _viewers += 1
+    start_camera_worker()
+
     try:
         while True:
-            with _frame_ready:
-                # Wait for the worker to publish a new frame
-                _frame_ready.wait(timeout=5.0)
+            with _jpeg_lock:
                 jpeg = _latest_jpeg
             if jpeg is None:
-                continue
+                ph = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(ph, "CONNECTING LIVE FEED...", (120, 240),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 220, 255), 2)
+                _, init_buf = cv2.imencode('.jpg', ph, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                jpeg = init_buf.tobytes()
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
+            time.sleep(0.033)
     finally:
-        # Runs when the browser closes the stream (tab closed, navigated away)
         with _viewers_lock:
             _viewers = max(0, _viewers - 1)
 
 @app.route('/video_feed')
 def video_feed():
+    global _camera_paused
+    with _viewers_lock:
+        _camera_paused = False
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/camera/pause', methods=['POST'])

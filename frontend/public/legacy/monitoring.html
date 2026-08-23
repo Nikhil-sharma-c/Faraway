@@ -2945,6 +2945,7 @@ function updateExamScore(students) {
 let _feedWatchdog = null;
 function connectFeed() {
     if (!$feedImg) return;
+    fetch(`${BASE}/api/camera/resume`, { method: 'POST' }).catch(() => {});
     $feedImg.src = `${BASE}/video_feed?ts=${Date.now()}`;
     // Watchdog: a silent proxy/backend hang fires no onerror, so if no frame has
     // rendered within a few seconds, treat it as a failure and reconnect.
