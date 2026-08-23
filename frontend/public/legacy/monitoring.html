@@ -1222,6 +1222,63 @@ body::after {
     cursor: progress;
 }
 
+.pem-ev-video-placeholder.pem-ev-failed {
+    background: radial-gradient(circle at center, rgba(69, 10, 10, 0.4) 0%, rgba(3, 7, 18, 0.95) 100%);
+    cursor: default;
+}
+
+.pem-ev-failed-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #f87171;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.pem-ev-actions {
+    margin-top: 0.35rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.pem-ev-download-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    font-family: var(--font, 'Inter', sans-serif);
+    padding: 0.32rem 0.65rem;
+    border-radius: var(--r-sm, 4px);
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+}
+
+.pem-ev-download-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: rgba(56, 189, 248, 0.5);
+    color: #fff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(56, 189, 248, 0.25);
+}
+
+.pem-ev-download-btn:disabled, .pem-ev-download-btn.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: var(--t4, #64748b);
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(255, 255, 255, 0.08);
+    transform: none;
+    box-shadow: none;
+}
+
 .pem-ev-processing-status {
     display: flex;
     align-items: center;
@@ -3206,14 +3263,15 @@ function escapeEvidenceHtml(value) {
 function evidenceVideoUrl(fileUrl) {
     if (!fileUrl) return null;
     const url = String(fileUrl);
-    if (/^https?:\/\//i.test(url)) return url;
+    if (/^https?:\/\//i.test(url) || url.startsWith('blob:')) return url;
     if (url.startsWith('/')) return `${BASE}${url}`;
     return `${BASE}/${url}`;
 }
 
 function normalizeEvidenceClip(clip) {
     const details = EVIDENCE_DETAILS[clip.type] || [clip.title || 'Critical Incident', clip.description || ''];
-    const status = clip.status || (clip.file_url || clip.videoUrl ? 'ready' : 'metadata');
+    const rawStatus = clip.status || (clip.file_url || clip.videoUrl ? 'ready' : 'recording');
+    const status = (rawStatus === 'ready' && (clip.file_url || clip.videoUrl)) ? 'ready' : (rawStatus === 'failed' ? 'failed' : 'recording');
     return {
         id: clip.id || `ev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: clip.type || 'CRITICAL_INCIDENT',
@@ -3225,6 +3283,7 @@ function normalizeEvidenceClip(clip) {
         clockTime: clip.clock_time || clip.clockTime || '',
         candidateName: clip.candidate_name || clip.candidateName || 'Monitored Candidate',
         candidateId: clip.candidate_id || clip.candidateId || 'N/A',
+        filename: clip.filename || '',
         status,
         videoUrl: evidenceVideoUrl(clip.file_url || clip.videoUrl)
     };
@@ -3235,10 +3294,10 @@ function mergeEvidenceClips(backendClips) {
     const fallback = sessionEvidenceClips.map(normalizeEvidenceClip);
     if (!backend.length) return fallback;
 
-    // The backend registry is authoritative for video URLs/status. Keep a
-    // frontend-only item only when no server clip of that incident type exists.
+    const serverIds = new Set(backend.map(clip => clip.id));
     const serverTypes = new Set(backend.map(clip => clip.type));
-    return [...backend, ...fallback.filter(clip => !serverTypes.has(clip.type))];
+    const unmergedFallback = fallback.filter(clip => !serverIds.has(clip.id) && !serverTypes.has(clip.type));
+    return [...backend, ...unmergedFallback];
 }
 
 async function fetchSessionEvidence() {
@@ -3253,20 +3312,52 @@ async function fetchSessionEvidence() {
 }
 
 async function pollEvidenceUntilReady(token) {
-    for (let attempt = 0; attempt < 10 && token === evidencePollingToken; attempt++) {
+    for (let attempt = 0; attempt < 15 && token === evidencePollingToken; attempt++) {
         const backendClips = await fetchSessionEvidence();
-        if (backendClips.length) {
+        if (backendClips && backendClips.length) {
             const merged = mergeEvidenceClips(backendClips);
             sessionEvidenceClips = merged;
             renderEvidenceSection(merged);
-            if (!merged.some(clip => clip.status === 'recording')) return;
+            const allReady = !merged.some(clip => clip.status === 'recording' || clip.status === 'metadata');
+            if (allReady) return;
         }
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+}
+
+async function downloadEvidenceVideo(url, filename) {
+    if (!url) {
+        alert('Video evidence is not yet available for download.');
+        return;
+    }
+    try {
+        const fullUrl = evidenceVideoUrl(url);
+        const res = await fetch(fullUrl, { credentials: 'include' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename || 'evidence-clip.mp4';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            URL.revokeObjectURL(blobUrl);
+            a.remove();
+        }, 1500);
+    } catch (err) {
+        console.warn('Direct blob fetch failed, falling back to anchor download:', err);
+        const a = document.createElement('a');
+        a.href = evidenceVideoUrl(url);
+        a.download = filename || 'evidence-clip.mp4';
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 500);
     }
 }
 
 function recordEvidenceClip(type, title, description, severity, badgeClass) {
-    if (!sessionActive) return;
     const now = Date.now();
     // Debounce to prevent duplicate clips for the same continuous incident within 6 seconds
     if (lastEvidenceTimestamps[type] && (now - lastEvidenceTimestamps[type] < 6000)) {
@@ -3288,16 +3379,14 @@ function recordEvidenceClip(type, title, description, severity, badgeClass) {
         badgeClass: badgeClass || 'danger',
         candidateName: candidateDisplay,
         candidateId: candidateIdDisplay,
-        status: 'metadata',
+        status: 'recording',
         videoUrl: null
     };
     sessionEvidenceClips.push(evidenceItem);
+    renderEvidenceSection(sessionEvidenceClips);
 
-    // The server starts the real recorder on the same detection edge. Refresh
-    // its registry so local metadata is replaced by a recording/ready MP4.
-    void fetchSessionEvidence().then(backendClips => {
-        if (backendClips.length) sessionEvidenceClips = mergeEvidenceClips(backendClips);
-    });
+    evidencePollingToken += 1;
+    void pollEvidenceUntilReady(evidencePollingToken);
 }
 
 function renderEvidenceSection(clips) {
@@ -3341,21 +3430,52 @@ function renderEvidenceSection(clips) {
         const safeVideoUrl = escapeEvidenceHtml(c.videoUrl || '');
         const safeSeverity = escapeEvidenceHtml(c.severity);
         const safeBadgeClass = c.badgeClass === 'warning' ? 'warning' : 'danger';
-        const player = c.status === 'ready' && c.videoUrl ? `
-            <video class="pem-ev-video" controls preload="metadata" src="${safeVideoUrl}"></video>
-        ` : c.status === 'recording' ? `
-            <div class="pem-ev-video-placeholder pem-ev-processing" title="Evidence clip is still encoding">
-                <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>REC EVIDENCE</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
-                <div class="pem-ev-processing-status"><span class="pem-ev-processing-spinner"></span>PROCESSING…</div>
-                <div class="pem-ev-processing-note">Finalizing local MP4 evidence clip</div>
-            </div>
-        ` : `
-            <div class="pem-ev-video-placeholder" title="No video file is available yet">
-                <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>EVIDENCE #${idx + 1}</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
-                <div class="pem-ev-play-trigger"><i data-lucide="video" style="width:18px;height:18px;"></i></div>
-                <div class="pem-ev-hud-overlay"><span class="pem-ev-threat-box-label"><i data-lucide="alert-triangle" style="width:10px;height:10px;"></i> ${safeTitle.toUpperCase()}</span></div>
-            </div>
-        `;
+
+        const cleanTitle = (c.title || 'incident').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        const cleanClock = (c.clockTime || c.timecode || '00-00-00').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        const evNumber = String(idx + 1).padStart(2, '0');
+        const safeDownloadFilename = escapeEvidenceHtml(c.filename || `evidence-${evNumber}-${cleanTitle}-${cleanClock}.mp4`);
+
+        let player = '';
+        let downloadButton = '';
+
+        if (c.status === 'ready' && c.videoUrl) {
+            player = `
+                <video class="pem-ev-video" controls playsinline preload="metadata" src="${safeVideoUrl}"></video>
+            `;
+            downloadButton = `
+                <button type="button" class="btn pem-ev-download-btn" onclick="downloadEvidenceVideo('${safeVideoUrl}', '${safeDownloadFilename}')" title="Download Incident Evidence Video">
+                    <i data-lucide="download" style="width:13px;height:13px;"></i> Download Video
+                </button>
+            `;
+        } else if (c.status === 'recording' || c.status === 'metadata') {
+            player = `
+                <div class="pem-ev-video-placeholder pem-ev-processing" title="Evidence clip is still encoding">
+                    <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>REC EVIDENCE</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
+                    <div class="pem-ev-processing-status"><span class="pem-ev-processing-spinner"></span>PREPARING VIDEO…</div>
+                    <div class="pem-ev-processing-note">Finalizing incident video evidence clip</div>
+                </div>
+            `;
+            downloadButton = `
+                <button type="button" class="btn pem-ev-download-btn disabled" disabled title="Preparing evidence video...">
+                    <i data-lucide="loader" class="lucide-spin" style="width:13px;height:13px;"></i> Preparing Video...
+                </button>
+            `;
+        } else {
+            // failed / unavailable
+            player = `
+                <div class="pem-ev-video-placeholder pem-ev-failed" title="Video evidence unavailable">
+                    <div class="pem-ev-rec-hud"><span><span class="pem-ev-rec-dot"></span>EVIDENCE #${idx + 1}</span><span class="pem-ev-tc-hud">${safeTimecode}</span></div>
+                    <div class="pem-ev-failed-status"><i data-lucide="alert-circle" style="width:16px;height:16px;"></i> Video evidence unavailable</div>
+                </div>
+            `;
+            downloadButton = `
+                <button type="button" class="btn pem-ev-download-btn disabled" disabled title="Video evidence unavailable">
+                    <i data-lucide="slash" style="width:13px;height:13px;"></i> Video Unavailable
+                </button>
+            `;
+        }
+
         html += `
             <div class="pem-evidence-card" id="${safeId}">
                 <div class="pem-ev-top">
@@ -3376,6 +3496,10 @@ function renderEvidenceSection(clips) {
                 <div class="pem-ev-meta">
                     <div class="pem-ev-desc">${safeDescription}</div>
                     <div class="pem-ev-candidate">Target: <strong>${safeCandidateName}</strong> (${safeCandidateId})</div>
+                </div>
+
+                <div class="pem-ev-actions">
+                    ${downloadButton}
                 </div>
             </div>
         `;

@@ -70,16 +70,13 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # active session and for the generated report.
 EVIDENCE_DIR = os.path.join(BASE_DIR, "backend", "evidence")
 os.makedirs(EVIDENCE_DIR, exist_ok=True)
-PRE_ROLL_SECONDS = float(os.environ.get("EVIDENCE_PRE_ROLL_SECONDS", "5"))
-POST_ROLL_SECONDS = float(os.environ.get("EVIDENCE_POST_ROLL_SECONDS", "10"))
+PRE_ROLL_SECONDS = float(os.environ.get("EVIDENCE_PRE_ROLL_SECONDS", "3"))
+POST_ROLL_SECONDS = float(os.environ.get("EVIDENCE_POST_ROLL_SECONDS", "3"))
 EVIDENCE_FPS = float(os.environ.get("EVIDENCE_FPS", "10"))
 EVIDENCE_RESOLUTION = (640, 480)
-EVIDENCE_COOLDOWN = float(os.environ.get("EVIDENCE_COOLDOWN_SECONDS", "30"))
-EVIDENCE_BUFFER_FRAMES = int(os.environ.get("EVIDENCE_BUFFER_FRAMES", "150"))
-# Hard ceiling on a single encode. A 15s/150-frame clip encodes in well under a
-# second at preset veryfast, so this only ever fires on a genuinely wedged
-# ffmpeg -- it exists so a stuck encoder can never leave a clip on "recording"
-# forever (see the deadlock note in _encode_evidence_frames_h264).
+EVIDENCE_COOLDOWN = float(os.environ.get("EVIDENCE_COOLDOWN_SECONDS", "6"))
+EVIDENCE_BUFFER_FRAMES = int(os.environ.get("EVIDENCE_BUFFER_FRAMES", "100"))
+# Hard ceiling on a single encode.
 EVIDENCE_ENCODE_TIMEOUT = float(os.environ.get("EVIDENCE_ENCODE_TIMEOUT", "60"))
 
 DEFAULT_CONFIG = {
@@ -3799,13 +3796,11 @@ def capture_evidence_clip(event_type, trigger_timestamp=None,
     this path.  In particular, identity and behavior alerts cannot accidentally
     create forensic videos by calling this helper.
     """
-    if event_type not in _EVIDENCE_EVENT_DETAILS or not SESSION_ACTIVE:
+    if event_type not in _EVIDENCE_EVENT_DETAILS:
         return None
 
     trigger_timestamp = float(trigger_timestamp or time.time())
     with _evidence_lifecycle_lock:
-        if not SESSION_ACTIVE:
-            return None
         generation = _evidence_session_generation
 
     with _evidence_cooldown_lock:
@@ -3855,7 +3850,7 @@ def capture_evidence_clip(event_type, trigger_timestamp=None,
         pre_roll_snapshot = list(_evidence_frame_buffer)
 
     with _evidence_lifecycle_lock:
-        if generation != _evidence_session_generation or not SESSION_ACTIVE:
+        if generation != _evidence_session_generation:
             return None
         with _evidence_clips_lock:
             session_evidence_clips.append(clip)
@@ -3879,13 +3874,6 @@ def capture_evidence_clip(event_type, trigger_timestamp=None,
                 with _evidence_lifecycle_lock:
                     if generation != _evidence_session_generation:
                         return
-                # The invigilator ended the session mid post-roll. Stop waiting
-                # for frames that will never arrive (the camera is released once
-                # the session stops) and encode what we already have, so the
-                # end-of-session report is not generated while this clip is
-                # still on "recording".
-                if not SESSION_ACTIVE:
-                    break
                 with _raw_lock:
                     latest_frame = _latest_raw_frame
                     latest_timestamp = _latest_raw_ts
@@ -4044,12 +4032,11 @@ def _camera_capture_worker():
         with _raw_lock:
             _latest_raw_frame = frame
             _latest_raw_ts = now
-        if SESSION_ACTIVE:
-            # The evidence buffer owns a copy and uses its own lock so neither
-            # preview composition nor inference blocks camera acquisition.
-            evidence_frame = frame.copy()
-            with _evidence_buffer_lock:
-                _evidence_frame_buffer.append((now, evidence_frame))
+        # The evidence buffer owns a copy and uses its own lock so neither
+        # preview composition nor inference blocks camera acquisition.
+        evidence_frame = frame.copy()
+        with _evidence_buffer_lock:
+            _evidence_frame_buffer.append((now, evidence_frame))
         _raw_frame_event.set()
         _phone_frame_event.set()
 
@@ -4680,15 +4667,11 @@ def _ai_worker_loop():
             "earbud_detected": "EARBUD_DETECTED",
             "book_detected": "PROHIBITED_MATERIAL",
         }
-        if SESSION_ACTIVE:
-            for flag, event_type in evidence_event_types.items():
-                detected = bool(room_state.get(flag, False))
-                if detected and not previous_evidence_flags[flag]:
-                    capture_evidence_clip(event_type, now)
-                previous_evidence_flags[flag] = detected
-        else:
-            for flag in previous_evidence_flags:
-                previous_evidence_flags[flag] = bool(room_state.get(flag, False))
+        for flag, event_type in evidence_event_types.items():
+            detected = bool(room_state.get(flag, False))
+            if detected and not previous_evidence_flags.get(flag, False):
+                capture_evidence_clip(event_type, now)
+            previous_evidence_flags[flag] = detected
 
         # 3. MediaPipe FaceLandmarker analysis (all visible faces with real iris & head pose)
         face_obs_list = face_analyzer.analyze(frame)
