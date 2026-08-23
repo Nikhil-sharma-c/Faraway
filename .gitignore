@@ -80,6 +80,8 @@ reports/
 static/reports/
 # Local SQLite databases
 *.db
+*.db-shm
+*.db-wal
 
 # ---- Datasets and Logs ----
 datasets/
