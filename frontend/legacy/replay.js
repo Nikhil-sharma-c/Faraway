@@ -301,7 +301,26 @@ function initCCTVVideoPlayer() {
     cctvVideo = document.getElementById('cctvVideoPlayer');
     if (!cctvVideo) return;
 
-    const setUnavailableState = () => {
+    let fallbackTried = false;
+    const setUnavailableState = async () => {
+        if (!fallbackTried) {
+            fallbackTried = true;
+            try {
+                const res = await fetch('/api/session/evidence', { credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json();
+                    const readyClip = (data.clips || []).find(c => c.status === 'ready' && (c.file_url || c.videoUrl));
+                    if (readyClip) {
+                        const url = readyClip.file_url || readyClip.videoUrl;
+                        cctvVideo.src = url.startsWith('/') ? url : `/${url}`;
+                        cctvVideo.load();
+                        return;
+                    }
+                }
+            } catch (e) {
+                // Ignore fallback network error
+            }
+        }
         if (DOM.videoStateOverlay) DOM.videoStateOverlay.style.display = 'flex';
         if (DOM.cctvStatusText) DOM.cctvStatusText.textContent = 'CCTV RECORDING UNAVAILABLE';
     };
