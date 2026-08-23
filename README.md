@@ -1,67 +1,92 @@
-# ProctorAI — Organized Project
+Proctor AI — Reviewable Action Timeline
 
-This is an organized copy of the working Face-Detection/ProctorAI application. The original folder is unchanged. The migration keeps the existing Flask API, computer-vision pipeline, model assets, legacy pages, datasets, and benchmark scripts while adding a React supervisor console.
+FAR AWAY 2026 — Round 2
 
-## Structure
+Challenge #50: Search and Discovery — Reviewable Action Timeline
 
-```text
-project/
-├── frontend/                 # React + Vite supervisor console
-│   ├── src/
-│   ├── package.json
-│   └── legacy/                # Existing HTML/CSS/JS pages retained for compatibility
-├── backend/
-│   ├── server.py              # Existing Flask API, adjusted to project paths
-│   ├── routes/                # Route modules for future extraction
-│   ├── services/              # Service modules for future extraction
-│   ├── database/              # Database adapters/migrations
-│   └── requirements.txt
-├── ml/
-│   ├── proctor_ai.py          # Face mesh, gaze, pose, temporal risk engine
-│   ├── face_recog.py          # Face detection/recognition/gallery
-│   ├── phone_detect.py        # Phone/person ROI detector
-│   ├── models/                # ONNX, MediaPipe and YOLO assets
-│   └── requirements.txt
-├── scripts/                   # Scraping, training, evaluation, benchmarks
-├── data/                      # Raw, processed and exam-cheating dataset
-├── tests/
-├── docs/                      # Existing project documentation
-├── .env                      # Local-only runtime settings (not for commit)
-└── .gitignore
-```
+Team: Error 404 Legends
+Team ID: U41UI9E8
 
-## Run locally
+---
 
-### Backend
+🚀 Overview
 
-```bash
-cd backend
-python -m venv .venv
-# Windows Git Bash: source .venv/Scripts/activate
-pip install -r requirements.txt
-pip install -r ../ml/requirements.txt
-python server.py
-```
+Proctor AI is an AI-powered examination monitoring system designed to help invigilators identify and review important examination events.
 
-The API listens on `http://localhost:5001`. It serves the legacy pages and API routes. PostgreSQL is still required for the existing authentication/admin/report features; set `DATABASE_URL` in `.env` or the environment before using those features.
+For Round 2, we improved our existing MVP with a Reviewable Action Timeline that makes important actions, changes, and state updates easy to discover and understand.
 
-### React frontend
+---
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+🎯 Problem
 
-Open `http://localhost:5173`. Vite proxies `/api`, `/video_feed`, and `/models` to the Flask backend. The console polls `/api/status` and links to the retained monitoring, enrollment, replay, reports, and admin pages.
+During an examination, simply showing the current status is not always enough.
 
-### ML-only monitor
+An invigilator may need to know:
 
-The previous standalone monitor is available as `ml/legacy_monitor.py`. It writes `snapshot.json` in its working directory and is retained as a compatibility utility; the Flask worker is the main integrated runtime.
+- What happened?
+- When did it happen?
+- What changed?
+- What was the previous state?
+- What happened after the event?
 
-## Migration notes
+Without a clear history, reviewing an incident can become difficult and time-consuming.
 
-- The original project at `faraway/Face-Detection-Project-using-opencv` was not modified.
-- Model files were copied into `ml/models`; generated/downloaded weights remain ignored by Git.
-- The large Flask file is intentionally preserved so behavior and API compatibility are not lost. `routes/`, `services/`, and `database/` are ready for incremental extraction.
-- Secrets and runtime config must be supplied locally; do not commit `.env` or `backend/config.json`.
+---
+
+💡 Our Solution
+
+We added a Reviewable Action Timeline to Proctor AI.
+
+It records important events chronologically and allows the invigilator to understand the progression of an incident.
+
+Example
+
+10:31 — Monitoring Started
+        ↓
+10:34 — Suspicious Activity Detected
+        ↓
+10:34 — Risk Status Changed
+        ↓
+10:35 — Alert Generated
+        ↓
+10:36 — Event Reviewed
+        ↓
+10:37 — Status Updated
+
+This transforms the system from showing only what is happening now into showing what happened and how the situation evolved.
+
+---
+
+🔎 Search & Discovery
+
+The timeline makes important events easier to discover and review.
+
+Events can be explored based on relevant information such as:
+
+- Time
+- Event
+- Student
+- Risk/Status
+- Review state
+
+This helps invigilators quickly find the information they need instead of manually reconstructing an incident.
+
+---
+
+⭐ Why It Matters
+
+The timeline provides context, history, and traceability for important examination events.
+
+«Don't just show what is happening. Show what happened, when it happened, and how it changed.»
+
+---
+
+🏆 FAR AWAY 2026
+
+Challenge #50 — Search and Discovery: Reviewable Action Timeline
+
+Our solution extends the existing Proctor AI MVP while directly addressing the Round 2 requirement for a clear, reviewable timeline of actions, changes, and state updates.
+
+👥 Team — Error 404 Legends
+
+Nalin Tuscano • Affan Shah • Royce D'Cunha • Mayuresh Raul • Nikhil Sharma
