@@ -1,6 +1,7 @@
 import cv2
 import time
 import json
+import math
 import os
 import sys
 import hmac
@@ -4121,6 +4122,7 @@ def _camera_capture_worker():
             _evidence_frame_buffer.append((now, evidence_frame))
         _raw_frame_event.set()
         _phone_frame_event.set()
+        time.sleep(0.01)
 
 
 def _render_hud_box(img, pt1, pt2, color, thickness, title, subtitle=None):
