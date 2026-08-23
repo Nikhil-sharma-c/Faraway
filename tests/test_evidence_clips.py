@@ -200,7 +200,66 @@ def test_capture_completes_within_time_budget():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: ending a session must finalize in-flight clips promptly, so the
+# Test 3: two different students may be caught with the same device type in
+# the same moment.  Each must retain a separately timestamped, named clip;
+# one student's cooldown must never suppress the other student's evidence.
+# ---------------------------------------------------------------------------
+def test_multiple_students_receive_named_timestamped_clips():
+    tmpdir = tempfile.mkdtemp()
+    _begin_session(tmpdir)
+    trigger = _fill_preroll()
+    old_cooldown = server.EVIDENCE_COOLDOWN
+    server.EVIDENCE_COOLDOWN = 30.0
+
+    stop = threading.Event()
+    feeder = threading.Thread(target=_feed_live_frames, args=(stop,), daemon=True)
+    feeder.start()
+    try:
+        alice = server.capture_evidence_clip(
+            "PHONE_DETECTED", trigger,
+            candidate_name="Alice Examiner", candidate_id="1001")
+        bob = server.capture_evidence_clip(
+            "PHONE_DETECTED", trigger + 0.01,
+            candidate_name="Bob Candidate", candidate_id="1002")
+        assert alice is not None and bob is not None, \
+            "each student needs an independent clip despite the shared event type"
+        assert alice["id"] != bob["id"]
+
+        ready_alice = _wait_for_status(alice["id"], {"ready", "failed"})
+        ready_bob = _wait_for_status(bob["id"], {"ready", "failed"})
+    finally:
+        stop.set()
+        server.EVIDENCE_COOLDOWN = old_cooldown
+
+    assert ready_alice and ready_alice["status"] == "ready"
+    assert ready_bob and ready_bob["status"] == "ready"
+    assert (ready_alice["candidate_name"], ready_alice["candidate_id"]) == ("Alice Examiner", "1001")
+    assert (ready_bob["candidate_name"], ready_bob["candidate_id"]) == ("Bob Candidate", "1002")
+    assert "Alice_Examiner_1001" in ready_alice["filename"]
+    assert "Bob_Candidate_1002" in ready_bob["filename"]
+    assert ready_alice["trigger_timestamp"] < ready_bob["trigger_timestamp"]
+
+    # The API contract used by the report/dashboard keeps clips in timestamp
+    # order, even when their encoders complete in the opposite order.
+    clips = server.app.test_client().get("/api/session/evidence").get_json()["clips"]
+    assert [c["id"] for c in clips] == [alice["id"], bob["id"]]
+
+
+def test_device_attribution_never_uses_first_visible_student():
+    candidates = [
+        {"student_id": "1001", "name": "Alice", "box": (100, 100, 200, 220)},
+        {"student_id": "1002", "name": "Bob", "box": (420, 100, 520, 220)},
+    ]
+    # This device sits at Bob's desk, even though Alice appears first.
+    subject = server._evidence_subject_for_device((455, 280, 500, 340), candidates)
+    assert subject and subject["student_id"] == "1002"
+    # A device outside every desk workspace is retained as unattributed rather
+    # than producing a false cheating allegation against either student.
+    assert server._evidence_subject_for_device((900, 900, 950, 950), candidates) is None
+
+
+# ---------------------------------------------------------------------------
+# Test 5: ending a session must finalize in-flight clips promptly, so the
 # end-of-session report embeds video instead of a "still processing" note.
 # ---------------------------------------------------------------------------
 def test_session_end_finalizes_inflight_clip():

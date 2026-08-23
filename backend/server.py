@@ -9,6 +9,7 @@ import secrets
 import threading
 import uuid
 import collections
+import re
 import numpy as np
 import psycopg2
 from flask import Flask, Response, jsonify, send_from_directory, request, session, redirect, stream_with_context
@@ -3583,6 +3584,80 @@ def _evidence_candidate_context():
     return "Unattributed candidate", "N/A"
 
 
+def _evidence_filename_component(value, fallback="unattributed"):
+    """Return a short, filesystem-safe evidence filename component."""
+    value = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_")
+    return (value or fallback)[:48]
+
+
+def _evidence_subject_for_device(device_box, candidates):
+    """Associate one detected device with its nearest known candidate.
+
+    A device is only attributed when it falls in a candidate's extended desk /
+    hand workspace.  This deliberately avoids the old "first visible student"
+    fallback: if two candidates are visible and the device cannot be placed in
+    either workspace, the evidence remains explicitly unattributed rather than
+    attaching a cheating allegation to the wrong person.
+    """
+    x1, y1, x2, y2 = device_box
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    best = None
+    best_score = None
+    for candidate in candidates:
+        fx1, fy1, fx2, fy2 = candidate["box"]
+        # The same workspace used for the student's phone-confidence score.
+        if not (fx1 - 240 <= cx <= fx2 + 240 and fy1 - 60 <= cy <= fy2 + 650):
+            continue
+        face_cx = (fx1 + fx2) / 2.0
+        # Horizontal proximity is the most reliable signal for a desk/hand
+        # object, while vertical distance breaks ties between adjacent faces.
+        score = abs(cx - face_cx) * 4.0 + abs(cy - fy2)
+        if best_score is None or score < best_score:
+            best, best_score = candidate, score
+    return best
+
+
+def _capture_attributed_evidence(device_hits, candidates, trigger_timestamp):
+    """Create one timestamped clip for each implicated candidate/device type.
+
+    Multiple people can be flagged in the same AI frame.  Deduplicating only
+    identical (event type, student) pairs preserves one clip per student while
+    the per-student cooldown prevents repeated frames of the same incident from
+    creating a flood of videos.
+    """
+    event_types = {
+        "phone": "PHONE_DETECTED",
+        "smartwatch": "SMARTWATCH_DETECTED",
+        "earbud": "EARBUD_DETECTED",
+        "book": "PROHIBITED_MATERIAL",
+    }
+    captured = []
+    seen = set()
+    for hit in device_hits:
+        event_type = event_types.get(hit.get("device_type", "phone"))
+        if not event_type:
+            continue
+        subject = _evidence_subject_for_device(hit["bbox"], candidates)
+        if subject is None:
+            name, student_id = "Unattributed candidate", "N/A"
+        else:
+            name = str(subject["name"] or subject["student_id"])
+            student_id = str(subject["student_id"])
+        key = (event_type, student_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        clip = capture_evidence_clip(
+            event_type,
+            trigger_timestamp,
+            candidate_name=name,
+            candidate_id=student_id,
+        )
+        if clip is not None:
+            captured.append(clip)
+    return captured
+
+
 def _sample_evidence_frames(frame_pairs, earliest_timestamp):
     """Downsample buffered raw frames to the output FPS while retaining order."""
     interval = 1.0 / max(EVIDENCE_FPS, 1.0)
@@ -3803,22 +3878,29 @@ def capture_evidence_clip(event_type, trigger_timestamp=None,
     with _evidence_lifecycle_lock:
         generation = _evidence_session_generation
 
-    with _evidence_cooldown_lock:
-        last_capture = _evidence_last_capture.get(event_type, 0.0)
-        if trigger_timestamp - last_capture < EVIDENCE_COOLDOWN:
-            return None
-        _evidence_last_capture[event_type] = trigger_timestamp
-
+    # Cool down incidents per student, not globally by device type.  Otherwise
+    # a phone detected beside Alice suppresses Bob's independently attributable
+    # phone clip for the next 30 seconds.
     if not candidate_name or not candidate_id:
         candidate_name, candidate_id = _evidence_candidate_context()
     candidate_name = str(candidate_name)
     candidate_id = str(candidate_id)
+    cooldown_key = (event_type, candidate_id)
+    with _evidence_cooldown_lock:
+        last_capture = _evidence_last_capture.get(cooldown_key, 0.0)
+        if trigger_timestamp - last_capture < EVIDENCE_COOLDOWN:
+            return None
+        _evidence_last_capture[cooldown_key] = trigger_timestamp
+
     event_details = _EVIDENCE_EVENT_DETAILS[event_type]
     capture_time = datetime.fromtimestamp(trigger_timestamp)
     session_date = capture_time.strftime("%Y-%m-%d")
     file_stamp = capture_time.strftime("%Y%m%d_%H%M%S")
     clip_id = f"ev_{int(trigger_timestamp * 1000)}_{uuid.uuid4().hex[:8]}"
-    filename = f"ev_{file_stamp}_{event_type}_{clip_id[-8:]}.mp4"
+    student_token = _evidence_filename_component(candidate_name)
+    student_id_token = _evidence_filename_component(candidate_id, "unknown")
+    filename = (f"ev_{file_stamp}_{student_token}_{student_id_token}_"
+                f"{event_type}_{clip_id[-8:]}.mp4")
     output_dir = os.path.join(EVIDENCE_DIR, session_date)
     output_path = os.path.abspath(os.path.join(output_dir, filename))
     session_seconds, session_timecode = _evidence_timecode(trigger_timestamp)
@@ -4580,13 +4662,6 @@ def _ai_worker_loop():
     global tracked_students, current_students_in_frame, track_to_student, track_votes, historical_risk_scores, smooth_boxes, smooth_face_boxes, _shared_draw_ops, _phone_person_boxes, _last_phone_detection_ts
     last_ai_ts = 0.0
     last_log_time = 0.0
-    previous_evidence_flags = {
-        "phone_detected": False,
-        "smartwatch_detected": False,
-        "earbud_detected": False,
-        "book_detected": False,
-    }
-    observed_evidence_epoch = _evidence_detection_epoch
 
     while True:
         with _raw_lock:
@@ -4655,23 +4730,6 @@ def _ai_worker_loop():
                 draw_ops.append(('hud_box', (px1, py1), (px2, py2), (0, 0, 255), 2,
                                  "CELL PHONE DETECTED", f"PROHIBITED DEVICE · {pconf:.0%}"))
 
-        # Evidence creation is edge-triggered and intentionally limited to
-        # prohibited devices/materials. Unknown people and behavioral alerts
-        # are never passed to the capture helper.
-        if observed_evidence_epoch != _evidence_detection_epoch:
-            previous_evidence_flags = {key: False for key in previous_evidence_flags}
-            observed_evidence_epoch = _evidence_detection_epoch
-        evidence_event_types = {
-            "phone_detected": "PHONE_DETECTED",
-            "smartwatch_detected": "SMARTWATCH_DETECTED",
-            "earbud_detected": "EARBUD_DETECTED",
-            "book_detected": "PROHIBITED_MATERIAL",
-        }
-        for flag, event_type in evidence_event_types.items():
-            detected = bool(room_state.get(flag, False))
-            if detected and not previous_evidence_flags.get(flag, False):
-                capture_evidence_clip(event_type, now)
-            previous_evidence_flags[flag] = detected
 
         # 3. MediaPipe FaceLandmarker analysis (all visible faces with real iris & head pose)
         face_obs_list = face_analyzer.analyze(frame)
@@ -4688,6 +4746,7 @@ def _ai_worker_loop():
         unknown_count = 0
         used_face_indices = set()
         face_dets = []   # authoritative face boxes handed to the per-frame tracker
+        evidence_candidates = []
 
         # Strict Bounding Box IoU and spatial containment assignment between MediaPipe
         # face observations and the identification worker's recognized faces.
@@ -4913,6 +4972,11 @@ def _ai_worker_loop():
                     "iris": iris_pts,
                     "gaze": gaze_arrows,
                 })
+                evidence_candidates.append({
+                    "student_id": str(sid),
+                    "name": str(snap["name"] or sid),
+                    "box": (sfx1, sfy1, sfx2, sfy2),
+                })
             else:
                 # Not committed to an identity. 'pending' = present too briefly
                 # to flag (suppressed noise / just appeared); 'unknown' =
@@ -4935,6 +4999,12 @@ def _ai_worker_loop():
                     "iris": iris_pts,
                     "gaze": [],
                 })
+
+        # Device hits are associated only after this frame's identities are
+        # stable.  This gives every implicated student their own timestamped
+        # clip and prevents a global event from being blamed on the first face
+        # encountered in the frame.
+        _capture_attributed_evidence(phone_hits, evidence_candidates, now)
 
         # Publish this cycle's detections to the per-frame tracker. The render
         # loop advances them by optical flow between now and the next cycle,
